@@ -3,7 +3,7 @@ Unofficial implementation of [MINER: Multiscale Implicit Neural Representations]
 
 **Only image reconstruction task is implemented.**
 
-:warning: There are many differences w.r.t. the original paper:
+# :warning: Differences w.r.t. the original paper:
 *  Should be the biggest difference: I didn't find laplacian pyramid to be useful. Precisely, I find gaussian pyramid performs on-par with laplacian pyramid, so I totally discard the laplacian pyramid.
 *  In the pseudo code on page 8, where the author states "Weight sharing for images", it means finer levels' networks are initialized with coarser level network weights. However, I find this to produce inferior quality, no matter laplacian or gaussian pyramid is used. Therefore, I initialize the network weights from scratch for all levels.
 *  The paper uses sinusoidal activation (does he mean SIREN? I don't know), but I use gaussian activation (in hidden layers) with trainable parameters (per block) like my experiments in [the other repo](https://github.com/kwea123/Coordinate-MLPs).
