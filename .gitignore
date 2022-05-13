@@ -1,3 +1,11 @@
+ckpts/
+logs/
+images/
+images_/
+*.png
+*.jpg
+*.mp4
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
