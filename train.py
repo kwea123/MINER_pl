@@ -58,7 +58,13 @@ class MINERSystem(LightningModule):
                              torch.ones(hparams.n_blocks, dtype=torch.bool))
 
     def forward(self, x, training_blocks, b_chunk):
-        return self.blockmlp(x, training_blocks, b_chunk)
+        out = self.blockmlp(x, training_blocks, b_chunk)
+        if hparams.level<=hparams.n_scales-2 and hparams.pyr=='laplacian':
+            if training_blocks is None:
+                out *= self.scales
+            else:
+                out *= self.scales[training_blocks]
+        return out
         
     def setup(self, stage=None):
         global I_j_gt
@@ -218,11 +224,14 @@ if __name__ == '__main__':
                                 nh=hparams.nh,
                                 nw=hparams.nw)
             I_j_gt_ = torch.tensor(I_j_gt_, dtype=I_j_u.dtype, device=I_j_u.device)
+            residual = I_j_gt_-I_j_u_
             # compute active blocks
-            loss = reduce((I_j_gt_-I_j_u_)**2, 'n p c -> n', 'mean')
+            loss = reduce(residual**2, 'n p c -> n', 'mean')
             active_blocks = loss>hparams.loss_thr
             hparams.n_blocks = active_blocks.sum().item()
             if hparams.pyr=='laplacian': # compute residual
+                scales = reduce(torch.abs(residual[active_blocks]),
+                                'n p c -> n 1 1', 'max')
                 I_j_gt -= rearrange(I_j_u.cpu().numpy(), '1 c h w -> h w c')
                 hparams.final_act = 'sin'
         else: # coarsest level
@@ -231,6 +240,8 @@ if __name__ == '__main__':
 
         system = MINERSystem(hparams)
         system.register_buffer("active_blocks", active_blocks)
+        if j<=hparams.n_scales-2 and hparams.pyr=='laplacian':
+            system.register_buffer("scales", scales)
 
         ckpt_cb = ModelCheckpoint(dirpath=f'ckpts/{hparams.exp_name}/l{j}',
                                   save_last=True,
@@ -253,7 +264,6 @@ if __name__ == '__main__':
                           num_sanity_val_steps=-1, # validate the whole image once before training
                           log_every_n_steps=1,
                           check_val_every_n_epoch=hparams.val_freq,
-                        #   gradient_clip_val=1e-3,
                           benchmark=True)
 
         trainer.fit(system)

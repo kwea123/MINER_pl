@@ -47,5 +47,6 @@ class ImageDataset(Dataset):
         # the pixels in each block are of the same position
         # TODO: Choosing position randomly for each block independently
         # might lead to better performance...
+        # TODO: Random select some blocks only instead of all blocks
         return {"uv": self.uv[:, idx],
                 "rgb": self.rgb[:, idx]}
