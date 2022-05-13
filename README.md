@@ -28,7 +28,7 @@ Unofficial implementation of [MINER: Multiscale Implicit Neural Representations]
 # :computer: Installation
 
 *  Run `pip install -r requirements.txt`.
-*  Download the images from [Acknowledgement](#acknowledgement) or prepare your own images into a folder called `images`.
+*  Download the images from [Acknowledgement](#gift_heart-acknowledgement) or prepare your own images into a folder called `images`.
 
 # :key: Training
 
