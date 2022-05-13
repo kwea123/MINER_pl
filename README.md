@@ -32,7 +32,7 @@ Unofficial implementation of [MINER: Multiscale Implicit Neural Representations]
 
 # :key: Training
 
-Pluto example (8GB mem required):
+Pluto example (5GB mem required):
 ```python3
 python train.py \
     --image_path images/pluto.png \
@@ -41,7 +41,7 @@ python train.py \
     --exp_name pluto4k_4scale 
 ```
 
-Tokyo station example (11GB mem required):
+Tokyo station example (8GB mem required):
 ```python3
 python train.py \
     --image_path images/tokyo-station.jpg \
