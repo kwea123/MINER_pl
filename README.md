@@ -8,16 +8,16 @@ Unofficial implementation of [MINER: Multiscale Implicit Neural Representations]
 *  The paper says it uses sinusoidal activation (does he mean SIREN? I don't know), but I use gaussian activation (in hidden layers) with trainable parameters (per block) like my experiments in [the other repo](https://github.com/kwea123/Coordinate-MLPs). In finer levels where the model predicts laplacian pyramids, I use sinusoidal activation with trainable parameters as output layer.
 *  Some difference in the hyperparameters: the default learning rate is `3e-2` instead of `5e-4`. Optimizer is `RAdam` instead of `Adam`. Block pruning happens when the loss is lower than `1e-4` (i.e. when PSNR>=40) rather than `2e-7`. Feel free to adjust these hyperparameters, but I find them to be optimal for a `patch_wh` around `(32, 32)`. Larger or smaller patch sizes might need parameter tuning.
 
-# Ref readings
+# :open_book: Ref readings
 
 [Laplacian pyramid explanation](https://paperswithcode.com/method/laplacian-pyramid)
 
-# Installation
+# :computer: Installation
 
 *  Run `pip install -r requirements.txt`.
 *  Download the images from [Acknowledgement](#acknowledgement) or prepare your own images into a folder called `images`.
 
-# Training
+# :key: Training
 
 Pluto example (8GB mem required):
 ```python3
@@ -48,13 +48,18 @@ tensorboard --logdir logs
 
 where you can see training curves and images.
 
-# Block decomposition
+# :red_square::green_square::blue_square: Block decomposition
 
 To visualize block decomposition per scale like Fig. 4 in the paper, see [block_visualization.ipynb](block_visualization.ipynb).
 
 <!-- # Testing
 
 To reconstruct the image using trained model, see [test.ipynb](test.ipynb). -->
+
+# Implementation tricks
+
+*  As suggested in *training details* on page 4, I implement parallel block inference by defining parameters of shape `(n_blocks, n_in, n_out)` and use `@` operator (same as `torch.bmm`) for faster inference.
+*  Since `nn.Parameter` doesn't support pruning (like `p.require_grad_(False)`) per layer, I manually save and reload the weights for pruned blocks during validation [start](https://github.com/kwea123/MINER_pl/blob/master/train.py#L115-L121) and [end](https://github.com/kwea123/MINER_pl/blob/master/train.py#L183-L187). Attention that **only zeroing the gradient does not work**, the reason is detailed [here](https://discuss.pytorch.org/t/freezing-part-of-the-layer-weights/9457/19?u=kwea123).
 
 # Acknowledgement
 
