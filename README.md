@@ -1,16 +1,29 @@
 # MINER_pl
 Unofficial implementation of [MINER: Multiscale Implicit Neural Representations](https://arxiv.org/pdf/2202.03532.pdf) in pytorch-lightning.
 
-**Only image reconstruction task is implemented.**
+![image](https://user-images.githubusercontent.com/11364490/168208863-656a0a7d-35d9-4b9b-86f9-d52da4182e35.png)
 
-# :warning: Main differences w.r.t. the original paper:
-*  In the pseudo code on page 8, where the author states **Weight sharing for images**, it means finer level networks are initialized with coarser level network weights. However, I did not find the correct way to implement this. Therefore, I initialize the network weights from scratch for all levels.
-*  The paper says it uses sinusoidal activation (does he mean SIREN? I don't know), but I use gaussian activation (in hidden layers) with trainable parameters (per block) like my experiments in [the other repo](https://github.com/kwea123/Coordinate-MLPs). In finer levels where the model predicts laplacian pyramids, I use sinusoidal activation with trainable parameters as output layer.
-*  Some difference in the hyperparameters: the default learning rate is `3e-2` instead of `5e-4`. Optimizer is `RAdam` instead of `Adam`. Block pruning happens when the loss is lower than `1e-4` (i.e. when PSNR>=40) rather than `2e-7`. Feel free to adjust these hyperparameters, but I find them to be optimal for a `patch_wh` around `(32, 32)`. Larger or smaller patch sizes might need parameter tuning.
+### Only image reconstruction task is implemented currently.
 
 # :open_book: Ref readings
 
-[Laplacian pyramid explanation](https://paperswithcode.com/method/laplacian-pyramid)
+*  [Laplacian pyramid explanation](https://paperswithcode.com/method/laplacian-pyramid)
+
+*  My explanatory videos
+
+<p align="center">
+  <a href="https://youtu.be/cXZtbfjnJtA">
+    <img src="https://user-images.githubusercontent.com/11364490/168209075-330d879e-2bff-467f-bf31-4e0ad2809777.png", width="45%">
+  </a>
+  <a href="https://youtu.be/MSVEhq67Ca4">
+    <img src="https://user-images.githubusercontent.com/11364490/168209233-4bde51ba-df6d-4fdb-87d6-9704986c1248.png", width="45%">
+  </a>
+</p>
+
+# :warning: Main differences w.r.t. the original paper before continue:
+*  In the pseudo code on page 8, where the author states **Weight sharing for images**, it means finer level networks are initialized with coarser level network weights. However, I did not find the correct way to implement this. Therefore, I initialize the network weights from scratch for all levels.
+*  The paper says it uses sinusoidal activation (does he mean SIREN? I don't know), but I use gaussian activation (in hidden layers) with trainable parameters (per block) like my experiments in [the other repo](https://github.com/kwea123/Coordinate-MLPs). In finer levels where the model predicts laplacian pyramids, I use sinusoidal activation with trainable parameters as output layer.
+*  Some difference in the hyperparameters: the default learning rate is `3e-2` instead of `5e-4`. Optimizer is `RAdam` instead of `Adam`. Block pruning happens when the loss is lower than `1e-4` (i.e. when PSNR>=40) rather than `2e-7`. Feel free to adjust these hyperparameters, but I find them to be optimal for a `patch_wh` around `(32, 32)`. Larger or smaller patch sizes might need parameter tuning.
 
 # :computer: Installation
 
@@ -56,12 +69,12 @@ To visualize block decomposition per scale like Fig. 4 in the paper, see [block_
 
 To reconstruct the image using trained model, see [test.ipynb](test.ipynb). -->
 
-# Implementation tricks
+# :bulb: Implementation tricks
 
 *  As suggested in *training details* on page 4, I implement parallel block inference by defining parameters of shape `(n_blocks, n_in, n_out)` and use `@` operator (same as `torch.bmm`) for faster inference.
 *  Since `nn.Parameter` doesn't support pruning (like `p.require_grad_(False)`) per layer, I manually save and reload the weights for pruned blocks during validation [start](https://github.com/kwea123/MINER_pl/blob/master/train.py#L115-L121) and [end](https://github.com/kwea123/MINER_pl/blob/master/train.py#L183-L187). Attention that **only zeroing the gradient does not work**, the reason is detailed [here](https://discuss.pytorch.org/t/freezing-part-of-the-layer-weights/9457/19?u=kwea123).
 
-# Acknowledgement
+# :gift_heart: Acknowledgement
 
 *  Pluto image: [NASA](https://solarsystem.nasa.gov/resources/933/true-colors-of-pluto/?category=planets/dwarf-planets_pluto)
 
