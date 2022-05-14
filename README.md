@@ -4,6 +4,7 @@ Unofficial implementation of [MINER: Multiscale Implicit Neural Representations]
 ![image](https://user-images.githubusercontent.com/11364490/168208863-656a0a7d-35d9-4b9b-86f9-d52da4182e35.png)
 
 ### Only image reconstruction task is implemented currently.
+### The training speed and memory is now under optimization...
 
 # :open_book: Ref readings
 
