@@ -43,7 +43,6 @@ def reshape_image(image, hparams):
 
 class MINERSystem(LightningModule):
     def __init__(self, hparams):
-        global n_training_blocks
         super().__init__()
         self.save_hyperparameters(hparams)
         self.first_val = True
@@ -73,11 +72,10 @@ class MINERSystem(LightningModule):
         return out
         
     def setup(self, stage=None):
-        global I_j_gt
         # TODO: use different dataset for train and val
         # only active blocks for train, and all blocks for val
         # currently rgb is always all blocks
-        self.dataset = ImageDataset(I_j_gt,
+        self.dataset = ImageDataset(self.I_j_gt,
                                     hparams.img_wh,
                                     hparams.patch_wh)
 
@@ -104,17 +102,15 @@ class MINERSystem(LightningModule):
                                      hparams.lr/30)
 
     def training_step(self, batch, batch_idx):
-        global n_training_blocks
         if self.first_val: # some trick to log the values after val_sanity_check
-            global psnr_, n_training_blocks
-            self.log('val/psnr', psnr_, True,
+            self.log('val/psnr', self.psnr_, True,
                      on_step=False, on_epoch=True)
-            self.log('val/n_training_blocks', n_training_blocks, True,
+            self.log('val/n_training_blocks', self.n_training_blocks, True,
                      on_step=False, on_epoch=True)
             self.first_val = False
 
         uv = rearrange(batch['uv'], 'p 1 c -> 1 p c')
-        uv = repeat(uv, '1 p c -> n p c', n=int(n_training_blocks))
+        uv = repeat(uv, '1 p c -> n p c', n=int(self.n_training_blocks))
         rgb_gt = rearrange(batch['rgb'], 'p n c -> n p c')
         rgb_pred = self(self.blockmlp_, uv, hparams.b_chunk)
         loss = (rgb_pred-rgb_gt[self.active_blocks][self.training_blocks])**2
@@ -160,7 +156,6 @@ class MINERSystem(LightningModule):
                 'rgb_pred': self(self.blockmlp, uv, hparams.b_chunk)}
 
     def validation_epoch_end(self, outputs):
-        global I_j_u_, psnr_, n_training_blocks
         rgb_gt = torch.cat([x['rgb_gt'] for x in outputs], 1).cpu() # always all blocks
         rgb_pred = torch.cat([x['rgb_pred'] for x in outputs], 1) # depends on active blocks
 
@@ -170,8 +165,8 @@ class MINERSystem(LightningModule):
                       'n p c -> n', 'mean')
         training_blocks_cpu = loss>hparams.loss_thr
         self.training_blocks = training_blocks_cpu.to(self.training_blocks.device)
-        n_training_blocks = self.training_blocks.sum().float()
-        self.log('val/n_training_blocks', n_training_blocks, True)
+        self.n_training_blocks = self.training_blocks.sum().float()
+        self.log('val/n_training_blocks', self.n_training_blocks, True)
 
         # visualize training blocks, rgb
         if hparams.level<=hparams.n_scales-2:
@@ -213,8 +208,8 @@ class MINERSystem(LightningModule):
                                           torch.cat([rgb_gt, self.rgb_pred]),
                                           self.current_epoch)
 
-        psnr_ = psnr(self.rgb_pred, rgb_gt)
-        self.log('val/psnr', psnr_, True)
+        self.psnr_ = psnr(self.rgb_pred, rgb_gt)
+        self.log('val/psnr', self.psnr_, True)
 
     def on_validation_end(self):
         # save checkpoint
@@ -287,7 +282,9 @@ if __name__ == '__main__':
 
         system = MINERSystem(hparams)
         system.register_buffer("active_blocks", active_blocks)
+        system.I_j_gt = I_j_gt
         if j<=hparams.n_scales-2 and hparams.pyr=='laplacian':
+            system.I_j_u_ = I_j_u_
             system.register_buffer("scales", scales)
 
         pbar = TQDMProgressBar(refresh_rate=1)
