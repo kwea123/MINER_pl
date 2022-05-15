@@ -4,7 +4,6 @@ Unofficial implementation of [MINER: Multiscale Implicit Neural Representations]
 ![image](https://user-images.githubusercontent.com/11364490/168208863-656a0a7d-35d9-4b9b-86f9-d52da4182e35.png)
 
 ### Only image reconstruction task is implemented currently.
-### The training speed and memory is now under optimization...
 
 # :open_book: Ref readings
 
@@ -23,7 +22,7 @@ Unofficial implementation of [MINER: Multiscale Implicit Neural Representations]
 
 # :warning: Main differences w.r.t. the original paper before continue:
 *  In the pseudo code on page 8, where the author states **Weight sharing for images**, it means finer level networks are initialized with coarser level network weights. However, I did not find the correct way to implement this. Therefore, I initialize the network weights from scratch for all levels.
-*  The paper says it uses sinusoidal activation (does he mean SIREN? I don't know), but I use gaussian activation (in hidden layers) with trainable parameters (per block) like my experiments in [the other repo](https://github.com/kwea123/Coordinate-MLPs). In finer levels where the model predicts laplacian pyramids, I use sinusoidal activation `x |-> sin(ax)` with trainable parameters `a` (per block) as output layer. Moreover, I precompute the maximum amplitude for laplacian residuals, and use that to scale the output, and I find it to be better than without scaling.
+*  The paper says it uses sinusoidal activation (does he mean SIREN? I don't know), but I use gaussian activation (in hidden layers) with trainable parameters (per block) like my experiments in [the other repo](https://github.com/kwea123/Coordinate-MLPs). In finer levels where the model predicts laplacian pyramids, I use sinusoidal activation `x |-> sin(ax)` with trainable parameters `a` (per block) as output layer (btw, this performs *significantly* better than simple `tanh`). Moreover, I precompute the maximum amplitude for laplacian residuals, and use it to scale the output, and I find it to be better than without scaling.
 *  Some difference in the hyperparameters: the default learning rate is `3e-2` instead of `5e-4`. Optimizer is `RAdam` instead of `Adam`. Block pruning happens when the loss is lower than `1e-4` (i.e. when PSNR>=40) rather than `2e-7`. Feel free to adjust these hyperparameters, but I find them to be optimal for a `patch_wh` around `(32, 32)`. Larger or smaller patch sizes might need parameter tuning.
 
 # :computer: Installation
@@ -33,7 +32,7 @@ Unofficial implementation of [MINER: Multiscale Implicit Neural Representations]
 
 # :key: Training
 
-Pluto example (5GB mem required):
+Pluto example (5.5GB mem required):
 ```python3
 python train.py \
     --image_path images/pluto.png \
@@ -42,7 +41,7 @@ python train.py \
     --exp_name pluto4k_4scale 
 ```
 
-Tokyo station example (8GB mem required):
+Tokyo station example (10GB mem required):
 ```python3
 python train.py \
     --image_path images/tokyo-station.jpg \
@@ -77,7 +76,7 @@ To reconstruct the image using trained model, see [test.ipynb](test.ipynb). -->
 # :bulb: Implementation tricks
 
 *  As suggested in *training details* on page 4, I implement parallel block inference by defining parameters of shape `(n_blocks, n_in, n_out)` and use `@` operator (same as `torch.bmm`) for faster inference.
-*  Since `nn.Parameter` doesn't support pruning (like `p.require_grad_(False)`) per layer, I manually save and reload the weights for pruned blocks during validation [start](https://github.com/kwea123/MINER_pl/blob/master/train.py#L115-L121) and [end](https://github.com/kwea123/MINER_pl/blob/master/train.py#L183-L187). Attention that **only zeroing the gradient does not work**, the reason is detailed [here](https://discuss.pytorch.org/t/freezing-part-of-the-layer-weights/9457/19?u=kwea123).
+*  To perform block pruning efficiently, I create two copies of the same network, and continually train and prune one of them while copying the trained parameters to the target network (somehow like in reinforcement learning, e.g. DDPG). This allows the network as well as the optimizer to shrink, therefore achieve higher memory and speed performance.
 
 # :gift_heart: Acknowledgement
 

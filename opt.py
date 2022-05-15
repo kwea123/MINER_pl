@@ -25,8 +25,6 @@ def get_opts():
 
     parser.add_argument('--batch_size', type=int, default=256,
                         help='batch size per block, smaller than @patch_wh product')
-    parser.add_argument('--b_chunk', type=int, default=16384,
-                        help='split the blocks into this number per forward step')
     parser.add_argument('--lr', type=float, default=3e-2,
                         help='learning rate')
     parser.add_argument('--num_epochs', nargs="+", type=int, default=[500],

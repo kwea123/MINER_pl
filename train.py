@@ -3,14 +3,18 @@ from torch import nn
 import torch.nn.functional as F
 from einops import rearrange, reduce, repeat
 from PIL import Image
-Image.MAX_IMAGE_PIXELS = None
+Image.MAX_IMAGE_PIXELS = None # enable reading large image
 import numpy as np
 import cv2
+import copy
+import os
+import warnings
+warnings.filterwarnings("ignore")
 
 from opt import get_opts
 
 # datasets
-from dataset import ImageDataset, collate_fn
+from dataset import ImageDataset
 from torch.utils.data import DataLoader
 
 # models
@@ -28,11 +32,6 @@ from pytorch_lightning.callbacks import ModelCheckpoint, TQDMProgressBar
 from pytorch_lightning.loggers import TensorBoardLogger
 
 
-def get_learning_rate(optimizer):
-    for param_group in optimizer.param_groups:
-        return param_group['lr']
-
-
 def reshape_image(image, hparams):
     # reshape image for visualization
     return rearrange(image, '(nh nw) (ph pw) c -> 1 c (nh ph) (nw pw)',
@@ -44,26 +43,33 @@ def reshape_image(image, hparams):
 
 class MINERSystem(LightningModule):
     def __init__(self, hparams):
+        global n_training_blocks
         super().__init__()
         self.save_hyperparameters(hparams)
         self.first_val = True
+        self.automatic_optimization = False
 
-        self.blockmlp = BlockMLP(n_blocks=hparams.n_blocks, 
-                                 n_in=2, n_out=3,
-                                 n_layers=hparams.n_layers,
-                                 n_hidden=hparams.n_hidden,
-                                 final_act=hparams.final_act,
-                                 a=hparams.a)
+        # create two copies of the same network
+        # the network used in training
+        self.blockmlp_ = BlockMLP(n_blocks=hparams.n_blocks, 
+                                  n_in=2, n_out=3,
+                                  n_layers=hparams.n_layers,
+                                  n_hidden=hparams.n_hidden,
+                                  final_act=hparams.final_act,
+                                  a=hparams.a)
+        # the network used in validation, updated by the trained network
+        self.blockmlp = copy.deepcopy(self.blockmlp_)
+
         self.register_buffer('training_blocks',
                              torch.ones(hparams.n_blocks, dtype=torch.bool))
 
-    def forward(self, x, training_blocks, b_chunk):
-        out = self.blockmlp(x, training_blocks, b_chunk)
+    def forward(self, model, x):
+        out = model(x)
         if hparams.level<=hparams.n_scales-2 and hparams.pyr=='laplacian':
-            if training_blocks is None:
-                out *= self.scales
+            if self.blockmlp.training:
+                out *= self.scales[self.training_blocks]
             else:
-                out *= self.scales[training_blocks]
+                out *= self.scales
         return out
         
     def setup(self, stage=None):
@@ -73,34 +79,32 @@ class MINERSystem(LightningModule):
         # currently rgb is always all blocks
         self.dataset = ImageDataset(I_j_gt,
                                     hparams.img_wh,
-                                    hparams.patch_wh,
-                                    hparams.n_blocks)
+                                    hparams.patch_wh)
 
     def train_dataloader(self):
         return DataLoader(self.dataset,
                           shuffle=True,
-                          num_workers=4,
-                          collate_fn=collate_fn,
+                          num_workers=0,
                           batch_size=self.hparams.batch_size,
                           pin_memory=True)
 
     def val_dataloader(self):
         return DataLoader(self.dataset,
                           shuffle=False,
-                          num_workers=4,
-                          collate_fn=collate_fn,
+                          num_workers=0,
                           batch_size=self.hparams.batch_size,
                           pin_memory=True)
 
     def configure_optimizers(self):
-        self.opt = RAdam(self.blockmlp.parameters(), lr=hparams.lr)
-        sch = CosineAnnealingLR(self.opt,
-                                hparams.num_epochs,
-                                hparams.lr/30)
-
-        return [self.opt], [sch]
+        # dummy that stores optimizer states and performs scheduling
+        # real optimizers are defined in @on_validation_end
+        self.opt = RAdam(self.blockmlp_.parameters(), lr=hparams.lr)
+        self.sch = CosineAnnealingLR(self.opt,
+                                     hparams.num_epochs,
+                                     hparams.lr/30)
 
     def training_step(self, batch, batch_idx):
+        global n_training_blocks
         if self.first_val: # some trick to log the values after val_sanity_check
             global psnr_, n_training_blocks
             self.log('val/psnr', psnr_, True,
@@ -109,26 +113,51 @@ class MINERSystem(LightningModule):
                      on_step=False, on_epoch=True)
             self.first_val = False
 
-        loss = self(batch['uv'], self.training_blocks, hparams.b_chunk) - \
-               batch['rgb'][self.active_blocks][self.training_blocks]
-        loss = (loss**2).mean()
+        uv = rearrange(batch['uv'], 'p 1 c -> 1 p c')
+        uv = repeat(uv, '1 p c -> n p c', n=int(n_training_blocks))
+        rgb_gt = rearrange(batch['rgb'], 'p n c -> n p c')
+        rgb_pred = self(self.blockmlp_, uv)
+        loss = (rgb_pred-rgb_gt[self.active_blocks][self.training_blocks])**2
+        loss = loss.mean()
 
-        self.log('lr', get_learning_rate(self.opt))
-        self.log('train/loss', loss)
+        self.opt_.zero_grad()
+        self.manual_backward(loss)
+        self.opt_.step()
 
-        return loss
+        self.log('lr', self.opt_.param_groups[0]['lr'])
+        self.log('train/loss', loss, True)
+
+        if self.trainer.is_last_batch:
+            # update opt_'s lr by the scheduler
+            self.sch.step()
+            self.opt_.param_groups[0]['lr'] = self.sch.get_last_lr()[0]
 
     def on_validation_start(self):
-        global params_dict
         if not self.first_val:
-            # reset the parameters back for freezed blocks
-            with torch.no_grad():
-                for n, p in self.blockmlp.named_parameters():
-                    p[~self.training_blocks] = params_dict[n][~self.training_blocks]
+            # copy blockmlp weight from blockmlp_
+            for p, p_ in zip(self.blockmlp.parameters(),
+                             self.blockmlp_.parameters()):
+                p.data[self.training_blocks] = p_.data
+
+            # copy opt states from opt_
+            for p, p_ in zip(self.opt.param_groups[0]['params'],
+                             self.opt_.param_groups[0]['params']):
+                for k, v in self.opt_.state[p_].items():
+                    if torch.is_tensor(v): # exp_avg, etc
+                        if k not in self.opt.state[p]:
+                            # Lazy state initialization
+                            # ref: https://github.com/pytorch/pytorch/blob/master/torch/optim/radam.py#L117-L123
+                            self.opt.state[p][k] = torch.zeros_like(p)
+                        self.opt.state[p][k][self.training_blocks] = v
+                    else: # step
+                        self.opt.state[p][k] = v
 
     def validation_step(self, batch, batch_idx):
-        return {'rgb_gt': batch['rgb'],
-                'rgb_pred': self(batch['uv'], None, hparams.b_chunk)}
+        uv = rearrange(batch['uv'], 'p 1 c -> 1 p c')
+        uv = repeat(uv, '1 p c -> n p c', n=int(self.active_blocks.sum()))
+        rgb = rearrange(batch['rgb'], 'p n c -> n p c')
+        return {'rgb_gt': rgb,
+                'rgb_pred': self(self.blockmlp, uv)}
 
     def validation_epoch_end(self, outputs):
         global I_j_u_, psnr_, n_training_blocks
@@ -142,10 +171,10 @@ class MINERSystem(LightningModule):
         n_training_blocks = self.training_blocks.sum().float()
         self.log('val/n_training_blocks', n_training_blocks, True)
 
-        # visualization of active blocks, rgb
-        rgb_pred_ = torch.zeros_like(rgb_gt)
-        rgb_pred_[self.active_blocks] = rgb_pred
+        # visualize training blocks, rgb
         if hparams.level<=hparams.n_scales-2:
+            rgb_pred_ = torch.zeros_like(rgb_gt)
+            rgb_pred_[self.active_blocks] = rgb_pred
             if hparams.pyr=='gaussian':
                 rgb_pred_[~self.active_blocks] = I_j_u_[~self.active_blocks]
             elif hparams.pyr=='laplacian':
@@ -154,7 +183,7 @@ class MINERSystem(LightningModule):
                 self.logger.experiment.add_images(
                     f'laplacian/l{hparams.level}',
                     torch.cat([(lap_gt+1)/2, (lap_pred+1)/2]), # normalize to [0, 1]
-                    self.global_step)
+                    self.current_epoch)
                 # add upsampled image to laplacian
                 rgb_gt += I_j_u_
                 rgb_pred_ += I_j_u_
@@ -165,33 +194,49 @@ class MINERSystem(LightningModule):
         self.rgb_pred = torch.clip(self.rgb_pred, 0, 1)
         rgb_gt = torch.clip(rgb_gt, 0, 1)
 
-        if hparams.level<=hparams.n_scales-2:
-            if self.first_val: # log this only once (doesn't change during training)
-                active_blocks_v = \
-                    rearrange(self.active_blocks, '(nh nw) -> 1 nh nw',
-                              nh=hparams.nh,
-                              nw=hparams.nw)
-                active_blocks_v = \
-                    repeat(active_blocks_v, '1 nh nw -> 1 (nh ph) (nw pw)',
-                           ph=hparams.patch_wh[1],
-                           pw=hparams.patch_wh[0])
-                self.logger.experiment.add_image(f'active_blocks/l{hparams.level}',
-                                                 (rgb_gt[0]+active_blocks_v)/2,
-                                                 self.global_step)
-            
+        blocks = self.active_blocks.clone()
+        if not self.first_val:
+            blocks[self.active_blocks] = self.training_blocks
+        blocks_v = rearrange(blocks, '(nh nw) -> 1 nh nw',
+                             nh=hparams.nh,
+                             nw=hparams.nw)
+        blocks_v = repeat(blocks_v, '1 nh nw -> 1 (nh ph) (nw pw)',
+                          ph=hparams.patch_wh[1],
+                          pw=hparams.patch_wh[0])
+        self.logger.experiment.add_image(f'training_blocks/l{hparams.level}',
+                                         (rgb_gt[0]+blocks_v)/2,
+                                         self.current_epoch)
+
         self.logger.experiment.add_images(f'image/l{hparams.level}',
                                           torch.cat([rgb_gt, self.rgb_pred]),
-                                          self.global_step)
+                                          self.current_epoch)
 
         psnr_ = psnr(self.rgb_pred, rgb_gt)
         self.log('val/psnr', psnr_, True)
 
     def on_validation_end(self):
-        global params_dict
-        params_dict = {}
-        for n, p in self.blockmlp.named_parameters():
-            params_dict[n] = p.clone() # save params
+        # save checkpoint
+        os.makedirs(f'ckpts/{hparams.exp_name}/l{j}', exist_ok=True)
+        state_dict = self.blockmlp.state_dict()
+        state_dict['active_blocks'] = self.active_blocks
+        state_dict['training_blocks'] = self.training_blocks
+        torch.save(state_dict, f'ckpts/{hparams.exp_name}/l{j}/last.ckpt')
 
+        # create new blockmlp_ with reduced blocks
+        for n, p in self.blockmlp.named_parameters():
+            setattr(self.blockmlp_, n, nn.Parameter(p[self.training_blocks]))
+
+        # create new opt_ with reduced blocks
+        self.opt_ = RAdam(self.blockmlp_.parameters(), lr=self.sch.get_last_lr()[0])
+        if not self.first_val:
+            # inherit the states: step, exp_avg, etc
+            for p, p_ in zip(self.opt.param_groups[0]['params'],
+                             self.opt_.param_groups[0]['params']):
+                for k, v in self.opt.state[p].items():
+                    if torch.is_tensor(v):
+                        self.opt_.state[p_][k] = v[self.training_blocks]
+                    else:
+                        self.opt_.state[p_][k] = v
 
 if __name__ == '__main__':
     hparams = get_opts()
@@ -243,12 +288,8 @@ if __name__ == '__main__':
         if j<=hparams.n_scales-2 and hparams.pyr=='laplacian':
             system.register_buffer("scales", scales)
 
-        ckpt_cb = ModelCheckpoint(dirpath=f'ckpts/{hparams.exp_name}/l{j}',
-                                  save_last=True,
-                                  save_top_k=0,
-                                  save_weights_only=True)
         pbar = TQDMProgressBar(refresh_rate=1)
-        callbacks = [ckpt_cb, pbar]
+        callbacks = [pbar]
 
         logger = TensorBoardLogger(save_dir='logs',
                                    name=f'{hparams.exp_name}/l{j}',
@@ -265,7 +306,6 @@ if __name__ == '__main__':
                           log_every_n_steps=1,
                           check_val_every_n_epoch=hparams.val_freq,
                           benchmark=True)
-
         trainer.fit(system)
 
         # upsample the predicted image for the next level
