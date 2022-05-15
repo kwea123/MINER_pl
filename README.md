@@ -78,6 +78,7 @@ To reconstruct the image using trained model, see [test.ipynb](test.ipynb). -->
 *  Setting `num_workers=0` in dataloader increased the speed a lot.
 *  As suggested in *training details* on page 4, I implement parallel block inference by defining parameters of shape `(n_blocks, n_in, n_out)` and use `@` operator (same as `torch.bmm`) for faster inference.
 *  To perform block pruning efficiently, I create two copies of the same network, and continually train and prune one of them while copying the trained parameters to the target network (somehow like in reinforcement learning, e.g. DDPG). This allows the network as well as the optimizer to shrink, therefore achieve higher memory and speed performance.
+*  In validation, I perform inference in chunks like NeRF, and pass each chunk to cpu to reduce GPU memory usage.
 
 # :gift_heart: Acknowledgement
 

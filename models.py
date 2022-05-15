@@ -52,23 +52,31 @@ class BlockMLP(nn.Module):
             self.register_parameter(f'w{i}', wi)
             self.register_parameter(f'b{i}', bi)
 
-    def forward(self, x):
+    def forward(self, x, b_chunks=16384, to_cpu=False):
         """
         Inputs:
             x: (n_blocks, B, n_in)
+            b_chunks: int, @x is split into chunks of at most @b_chunks blocks
+            to_cpu: pass to CPU per chunk to decrease GPU usage. In val only.
         
         Outputs:
             (n_blocks, B, n_out)
         """
-        for i in range(self.n_layers):
-            wi = getattr(self, f'w{i}')
-            bi = getattr(self, f'b{i}')
-            ai = getattr(self, f'a{i}')
-            if i<self.n_layers-1:
-                x = gaussian_activation(x@wi+bi, ai)
-            else: # last layer
-                if self.final_act == 'sigmoid':
-                    x = ai(x@wi+bi)
-                elif self.final_act == 'sin':
-                    x = scaledsin_activation(x@wi+bi, ai)
-        return x
+        out = []
+        for c in range(0, len(x), b_chunks):
+            x_ = x[c:c+b_chunks]
+            for i in range(self.n_layers):
+                wi = getattr(self, f'w{i}')[c:c+b_chunks]
+                bi = getattr(self, f'b{i}')[c:c+b_chunks]
+                ai = getattr(self, f'a{i}')
+                if i<self.n_layers-1:
+                    x_ = gaussian_activation(x_@wi+bi, ai[c:c+b_chunks])
+                else: # last layer
+                    if self.final_act == 'sigmoid':
+                        x_ = ai(x_@wi+bi)
+                    elif self.final_act == 'sin':
+                        x_ = scaledsin_activation(x_@wi+bi, ai[c:c+b_chunks])
+            if to_cpu:
+                x_ = x_.cpu()
+            out += [x_]
+        return torch.cat(out)

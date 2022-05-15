@@ -63,13 +63,13 @@ class MINERSystem(LightningModule):
         self.register_buffer('training_blocks',
                              torch.ones(hparams.n_blocks, dtype=torch.bool))
 
-    def forward(self, model, x):
-        out = model(x)
+    def forward(self, model, x, b_chunks):
+        out = model(x, b_chunks, not self.blockmlp.training)
         if hparams.level<=hparams.n_scales-2 and hparams.pyr=='laplacian':
             if self.blockmlp.training:
                 out *= self.scales[self.training_blocks]
             else:
-                out *= self.scales
+                out *= self.scales.cpu()
         return out
         
     def setup(self, stage=None):
@@ -116,7 +116,7 @@ class MINERSystem(LightningModule):
         uv = rearrange(batch['uv'], 'p 1 c -> 1 p c')
         uv = repeat(uv, '1 p c -> n p c', n=int(n_training_blocks))
         rgb_gt = rearrange(batch['rgb'], 'p n c -> n p c')
-        rgb_pred = self(self.blockmlp_, uv)
+        rgb_pred = self(self.blockmlp_, uv, hparams.b_chunk)
         loss = (rgb_pred-rgb_gt[self.active_blocks][self.training_blocks])**2
         loss = loss.mean()
 
@@ -157,26 +157,28 @@ class MINERSystem(LightningModule):
         uv = repeat(uv, '1 p c -> n p c', n=int(self.active_blocks.sum()))
         rgb = rearrange(batch['rgb'], 'p n c -> n p c')
         return {'rgb_gt': rgb,
-                'rgb_pred': self(self.blockmlp, uv)}
+                'rgb_pred': self(self.blockmlp, uv, hparams.b_chunk)}
 
     def validation_epoch_end(self, outputs):
         global I_j_u_, psnr_, n_training_blocks
-        rgb_gt = torch.cat([x['rgb_gt'] for x in outputs], 1) # always all blocks
+        rgb_gt = torch.cat([x['rgb_gt'] for x in outputs], 1).cpu() # always all blocks
         rgb_pred = torch.cat([x['rgb_pred'] for x in outputs], 1) # depends on active blocks
 
         # remove converged blocks
-        loss = reduce((rgb_pred-rgb_gt[self.active_blocks])**2,
+        active_blocks_cpu = self.active_blocks.cpu()
+        loss = reduce((rgb_pred-rgb_gt[active_blocks_cpu])**2,
                       'n p c -> n', 'mean')
-        self.training_blocks = loss>hparams.loss_thr
+        training_blocks_cpu = loss>hparams.loss_thr
+        self.training_blocks = training_blocks_cpu.to(self.training_blocks.device)
         n_training_blocks = self.training_blocks.sum().float()
         self.log('val/n_training_blocks', n_training_blocks, True)
 
         # visualize training blocks, rgb
         if hparams.level<=hparams.n_scales-2:
             rgb_pred_ = torch.zeros_like(rgb_gt)
-            rgb_pred_[self.active_blocks] = rgb_pred
+            rgb_pred_[active_blocks_cpu] = rgb_pred
             if hparams.pyr=='gaussian':
-                rgb_pred_[~self.active_blocks] = I_j_u_[~self.active_blocks]
+                rgb_pred_[~active_blocks_cpu] = I_j_u_[~active_blocks_cpu]
             elif hparams.pyr=='laplacian':
                 lap_gt = reshape_image(rgb_gt, hparams)
                 lap_pred = reshape_image(rgb_pred_, hparams)
@@ -194,9 +196,9 @@ class MINERSystem(LightningModule):
         self.rgb_pred = torch.clip(self.rgb_pred, 0, 1)
         rgb_gt = torch.clip(rgb_gt, 0, 1)
 
-        blocks = self.active_blocks.clone()
+        blocks = active_blocks_cpu.clone()
         if not self.first_val:
-            blocks[self.active_blocks] = self.training_blocks
+            blocks[active_blocks_cpu] = training_blocks_cpu
         blocks_v = rearrange(blocks, '(nh nw) -> 1 nh nw',
                              nh=hparams.nh,
                              nw=hparams.nw)
