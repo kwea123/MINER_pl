@@ -16,6 +16,10 @@ def get_opts():
                         choices=['gaussian', 'laplacian'],
                         help='use which image pyramid')
 
+    parser.add_argument('--use_pe', action='store_true', default=False,
+                        help='use positional encoding for uv')
+    parser.add_argument('--n_freq', type=int, default=5,
+                        help='number of frequencies of positional encoding')
     parser.add_argument('--n_layers', type=int, default=4,
                         help='number of layers in each MLP')
     parser.add_argument('--n_hidden', type=int, default=20,

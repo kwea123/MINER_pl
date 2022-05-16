@@ -12,6 +12,29 @@ def scaledsin_activation(x, a):
     return torch.sin(x*a)
 
 
+class PE(nn.Module):
+    """
+    positional encoding
+    """
+    def __init__(self, P):
+        """
+        P: (2, F) encoding matrix
+        """
+        super().__init__()
+        self.register_buffer("P", P)
+
+    @property
+    def out_dim(self):
+        return self.P.shape[1]*2
+
+    def forward(self, x):
+        """
+        x: (n_blocks, B, 2)
+        """
+        x_ = x @ self.P # (n_blocks, B, F)
+        return torch.cat([torch.sin(x_), torch.cos(x_)], -1) # (n_blocks, B, 2*F)
+
+
 class BlockMLP(nn.Module):
     """
     A BlockMLP consists of all the MLPs of a certain scale.

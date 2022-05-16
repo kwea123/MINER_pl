@@ -18,7 +18,7 @@ from dataset import ImageDataset
 from torch.utils.data import DataLoader
 
 # models
-from models import BlockMLP
+from models import PE, BlockMLP
 
 # metrics
 from metrics import psnr
@@ -48,10 +48,17 @@ class MINERSystem(LightningModule):
         self.first_val = True
         self.automatic_optimization = False
 
+        if hparams.use_pe:
+            P = torch.cat([torch.eye(2)*2**i for i in range(hparams.n_freq)], 1)
+            self.pe = PE(P)
+            n_in = self.pe.out_dim
+        else:
+            n_in = 2
+
         # create two copies of the same network
         # the network used in training
         self.blockmlp_ = BlockMLP(n_blocks=hparams.n_blocks, 
-                                  n_in=2, n_out=3,
+                                  n_in=n_in, n_out=3,
                                   n_layers=hparams.n_layers,
                                   n_hidden=hparams.n_hidden,
                                   final_act=hparams.final_act,
@@ -63,6 +70,8 @@ class MINERSystem(LightningModule):
                              torch.ones(hparams.n_blocks, dtype=torch.bool))
 
     def forward(self, model, x, b_chunks):
+        if hparams.use_pe:
+            x = self.pe(x)
         out = model(x, b_chunks, not self.blockmlp.training)
         if hparams.level<=hparams.n_scales-2 and hparams.pyr=='laplacian':
             if self.blockmlp.training:
@@ -114,7 +123,6 @@ class MINERSystem(LightningModule):
                      on_step=False, on_epoch=True)
             self.first_val = False
 
-        # TODO: train random blocks
         uv = rearrange(batch['uv'], 'p 1 c -> 1 p c')
         uv = repeat(uv, '1 p c -> n p c', n=int(self.n_training_blocks))
         rgb_gt = rearrange(batch['rgb'], 'p n c -> n p c')
@@ -249,6 +257,8 @@ if __name__ == '__main__':
     assert hparams.img_wh[0]%(hparams.patch_wh[0]*2**(hparams.n_scales-1))==0 and \
            hparams.img_wh[1]%(hparams.patch_wh[1]*2**(hparams.n_scales-1))==0, \
            'img_wh must be a multiple of patch_wh*2**(n_scales-1)!'
+    assert hparams.num_epochs[-1]%hparams.val_freq==0, \
+           'last num_epochs must be a multiple of val_freq!'
     hparams.batch_size = min(hparams.batch_size,
                              hparams.patch_wh[0]*hparams.patch_wh[1])
     num_epochs = hparams.num_epochs[::-1]
@@ -313,7 +323,7 @@ if __name__ == '__main__':
                           num_sanity_val_steps=-1, # validate the whole image once before training
                           log_every_n_steps=1,
                           reload_dataloaders_every_n_epochs=1,
-                          check_val_every_n_epoch=hparams.val_freq)
+                          check_val_every_n_epoch=hparams.val_freq if j==0 else hparams.num_epochs)
         trainer.fit(system)
 
         # upsample the predicted image for the next level

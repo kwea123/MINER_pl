@@ -23,6 +23,7 @@ Unofficial implementation of [MINER: Multiscale Implicit Neural Representations]
 # :warning: Main differences w.r.t. the original paper before continue:
 *  In the pseudo code on page 8, where the author states **Weight sharing for images**, it means finer level networks are initialized with coarser level network weights. However, I did not find the correct way to implement this. Therefore, I initialize the network weights from scratch for all levels.
 *  The paper says it uses sinusoidal activation (does he mean SIREN? I don't know), but I use gaussian activation (in hidden layers) with trainable parameters (per block) like my experiments in [the other repo](https://github.com/kwea123/Coordinate-MLPs). In finer levels where the model predicts laplacian pyramids, I use sinusoidal activation `x |-> sin(ax)` with trainable parameters `a` (per block) as output layer (btw, this performs *significantly* better than simple `tanh`). Moreover, I precompute the maximum amplitude for laplacian residuals, and use it to scale the output, and I find it to be better than without scaling.
+*  I experimented with a common trick in coordinate mlp: *(positional encoding)[https://github.com/tancik/fourier-feature-networks]* and find that using it can increase training time/accuracy with the same number of parameters (by reducing 1 layer). This can be turned on/off by specifying the argument `--use_pe`. The optimal number of frequencies depends on the patch size, the larger patch sizes, the more number of frequencies you need and vice versa.
 *  Some difference in the hyperparameters: the default learning rate is `3e-2` instead of `5e-4`. Optimizer is `RAdam` instead of `Adam`. Block pruning happens when the loss is lower than `1e-4` (i.e. when PSNR>=40) rather than `2e-7`. Feel free to adjust these hyperparameters, but I find them to be optimal for a `patch_wh` around `(32, 32)`. Larger or smaller patch sizes might need parameter tuning.
 
 # :computer: Installation
@@ -37,6 +38,7 @@ Pluto example:
 python train.py \
     --image_path images/pluto.png \
     --img_wh 4096 4096 --patch_wh 32 32 --batch_size 256 --n_scales 4 \
+    --use_pe --n_freq 4 --n_layers 3 \
     --num_epochs 50 50 50 200 \
     --exp_name pluto4k_4scale 
 ```
@@ -46,14 +48,16 @@ Tokyo station example:
 python train.py \
     --image_path images/tokyo-station.jpg \
     --img_wh 6000 4000 --patch_wh 25 25 --batch_size 192 --n_scales 5 \
+    --use_pe --n_freq 4 --n_layers 3 \
     --num_epochs 50 50 50 50 150 \
     --exp_name tokyo6k_5scale 
 ```
 
 | Image (size) | Training time (s) | Max GPU mem (MiB) | PSNR |
 |:---:|:---:|:---:|:---:|
-| Pluto (4096x4096) | 65 | 3473 | 41.20 |
-| Tokyo station (6000x4000) | 89 | 7993 | 42.17 |
+| Pluto (4096x4096) | 55 | 3171 | 42.11 |
+| Tokyo station (6000x4000) | 68 | 6819 | 42.48 |
+| Shibuya (14080x5120) | 341 | 8847 | 39.29 |
 
 
 The original image will be resized to `img_wh` for reconstruction. You need to make sure `img_wh` divided by `2^(n_scales-1)` (the resolution at the coarsest level) is still a multiple of `patch_wh`.
@@ -96,3 +100,7 @@ To reconstruct the image using trained model, see [test.ipynb](test.ipynb). -->
 *  Shibuya image: [Trevor Dobson](https://www.flickr.com/photos/trevor_dobson_inefekt69/29314390837)
 
 *  Tokyo station image: [baroparo](https://pixabay.com/photos/tokyo-station-tokyo-station-japan-641769/?download)
+
+# :question: Further readings
+
+I observed
