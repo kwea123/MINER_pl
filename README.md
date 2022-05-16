@@ -91,6 +91,8 @@ Examples:
 
 To reconstruct the image using trained model, see [test.ipynb](test.ipynb).
 
+Pretrained models can be downloaded from [releases](https://github.com/kwea123/MINER_pl/releases).
+
 # :bulb: Implementation tricks
 
 *  Setting `num_workers=0` in dataloader increased the speed a lot.
