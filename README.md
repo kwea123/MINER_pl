@@ -87,9 +87,9 @@ Examples:
 ![pluto4k_5scale_lap](https://user-images.githubusercontent.com/11364490/168275200-e625d828-61df-4ff2-a658-7dd10e123847.jpg)
 ![tokyo6k_5scale_lap](https://user-images.githubusercontent.com/11364490/168275208-a35e828d-0ca0-408f-90c3-89dd97d108ba.jpg)
 
-<!-- # Testing
+# :mag_right: Testing
 
-To reconstruct the image using trained model, see [test.ipynb](test.ipynb). -->
+To reconstruct the image using trained model, see [test.ipynb](test.ipynb).
 
 # :bulb: Implementation tricks
 

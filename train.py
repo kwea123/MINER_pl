@@ -14,7 +14,7 @@ warnings.filterwarnings("ignore")
 from opt import get_opts
 
 # datasets
-from dataset import ImageDataset
+from datasets import dataset_dict
 from torch.utils.data import DataLoader
 
 # models
@@ -47,6 +47,7 @@ class MINERSystem(LightningModule):
         self.save_hyperparameters(hparams)
         self.first_val = True
         self.automatic_optimization = False
+        self.dataset = dataset_dict[hparams.task]
 
         if hparams.use_pe:
             P = torch.cat([torch.eye(2)*2**i for i in range(hparams.n_freq)], 1)
@@ -82,7 +83,7 @@ class MINERSystem(LightningModule):
         
     def setup(self, stage=None):
         # validation is always the whole image
-        self.val_dataset = ImageDataset(self.I_j_gt,
+        self.val_dataset = self.dataset(self.I_j_gt,
                                         hparams.subimg_wh,
                                         hparams.patch_wh)
 
@@ -90,7 +91,7 @@ class MINERSystem(LightningModule):
         # load only active blocks to accelerate
         active_blocks = self.active_blocks_cpu.clone()
         active_blocks[self.active_blocks_cpu] = self.training_blocks_cpu
-        train_dataset = ImageDataset(self.I_j_gt,
+        train_dataset = self.dataset(self.I_j_gt,
                                      hparams.subimg_wh,
                                      hparams.patch_wh,
                                      active_blocks)
@@ -234,6 +235,8 @@ class MINERSystem(LightningModule):
         state_dict = self.blockmlp.state_dict()
         state_dict['active_blocks'] = self.active_blocks
         state_dict['training_blocks'] = self.training_blocks
+        if hparams.level <= hparams.n_scales-2:
+            state_dict['scales'] = self.scales
         torch.save(state_dict, f'{ckpt_path}/l{j}.ckpt')
 
         # create new blockmlp_ with reduced blocks
@@ -269,7 +272,7 @@ if __name__ == '__main__':
     num_epochs = hparams.num_epochs[::-1]
 
     # load image of the original scale once
-    orig_image = np.float32(Image.open(hparams.image_path).convert('RGB'))/255.
+    orig_image = np.float32(Image.open(hparams.path).convert('RGB'))/255.
     orig_image = cv2.resize(orig_image, (hparams.img_wh[0], hparams.img_wh[1]))
 
     # split into sub-images
@@ -293,16 +296,15 @@ if __name__ == '__main__':
             hparams.level = j
             hparams.final_act = 'sigmoid'
 
-            I_j_gt = cv2.resize(image,
-                        (hparams.subimg_wh[0]//(2**j), hparams.subimg_wh[1]//(2**j)))
+            I_j_gt = cv2.resize(image, None, fx=1/2**j, fy=1/2**j)
             # number of horizontal and vertical blocks
             hparams.nh = hparams.subimg_wh[1]//(hparams.patch_wh[1]*2**j)
             hparams.nw = hparams.subimg_wh[0]//(hparams.patch_wh[0]*2**j)
             if j <= hparams.n_scales-2:
                 I_j_u_ = rearrange(I_j_u,
-                                '1 c (nh ph) (nw pw) -> (nh nw) (ph pw) c',
-                                nh=hparams.nh,
-                                nw=hparams.nw)
+                                   '1 c (nh ph) (nw pw) -> (nh nw) (ph pw) c',
+                                   nh=hparams.nh,
+                                   nw=hparams.nw)
                 I_j_gt_ = rearrange(I_j_gt, '(nh ph) (nw pw) c -> (nh nw) (ph pw) c',
                                     nh=hparams.nh,
                                     nw=hparams.nw)
@@ -355,6 +357,7 @@ if __name__ == '__main__':
                                   align_corners=True)
 
         # compute the psnr for this sub-image
-        sub_psnrs += [psnr(rearrange(system.rgb_pred.numpy(), '1 c h w -> h w c'), image)]
+        sub_psnrs += [psnr(rearrange(system.rgb_pred.numpy(), '1 c h w -> h w c'),
+                           image)]
 
     print(f'PSNR : {np.mean(sub_psnrs):.2f} dB')

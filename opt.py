@@ -3,8 +3,11 @@ import argparse
 def get_opts():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('--image_path', type=str, default='images/pluto.png',
-                        help='path to the image to reconstruct')
+    parser.add_argument('--task', type=str, default='image',
+                        choices=['image'],
+                        help='which task to perform')
+    parser.add_argument('--path', type=str, default='images/pluto.png',
+                        help='path to the object to reconstruct')
     parser.add_argument('--patch_wh', nargs="+", type=int, default=[32, 32],
                         help='resolution (w, h) of each patch')
     parser.add_argument('--n_scales', type=int, default=1,
