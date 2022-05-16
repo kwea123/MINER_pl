@@ -112,7 +112,7 @@ During a stream, my audience suggested me to test on this image with random pixe
 
 ![random](https://user-images.githubusercontent.com/11364490/168567099-56c226a8-9f79-4710-9291-cc7ecef26f6d.png)
 
-The default `32x32` patch size doesn't work well, since the texture varies too quickly inside a patch. Decreasing to `16x16` with other default parameters make the network converge right away to `43.91 dB` under a minute. Surprisingly, with the other image reconstruction SOTA [instant-ngp](https://github.com/NVlabs/instant-ngp#image-of-einstein), the network is stuck at `17 dB` no matter how long I train.
+The default `32x32` patch size doesn't work well, since the texture varies too quickly inside a patch. Decreasing to `16x16` and increasing network hidden units make the network converge right away to `43.91 dB` under a minute. Surprisingly, with the other image reconstruction SOTA [instant-ngp](https://github.com/NVlabs/instant-ngp#image-of-einstein), the network is stuck at `17 dB` no matter how long I train.
 
 ![ngp-random](https://user-images.githubusercontent.com/11364490/168567783-40a9c123-01af-472c-9885-e52a778df18e.png)
 
