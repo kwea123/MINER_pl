@@ -119,15 +119,17 @@ class MINERSystem(LightningModule):
         uv = repeat(uv, '1 p c -> n p c', n=int(self.n_training_blocks))
         rgb_gt = rearrange(batch['rgb'], 'p n c -> n p c')
         rgb_pred = self(self.blockmlp_, uv, hparams.b_chunk)
-        loss = (rgb_pred-rgb_gt)**2
-        loss = loss.mean()
+        mse = (rgb_pred-rgb_gt)**2
+        loss = reduce(mse, 'n p c -> n', 'mean')
+        # heuristics: easier blocks have higher weights (make them converge faster)
+        weight = 1/(loss.detach()+1e-8)
 
         self.opt_.zero_grad()
-        self.manual_backward(loss)
+        self.manual_backward((weight*loss).mean())
         self.opt_.step()
 
         self.log('lr', self.opt_.param_groups[0]['lr'])
-        self.log('train/loss', loss, True)
+        self.log('train/loss', mse.mean(), True)
 
         if self.trainer.is_last_batch:
             # update opt_'s lr by the scheduler
@@ -227,7 +229,7 @@ class MINERSystem(LightningModule):
 
         # create new blockmlp_ with reduced blocks
         for n, p in self.blockmlp.named_parameters():
-            setattr(self.blockmlp_, n, nn.Parameter(p[self.training_blocks]))
+            setattr(self.blockmlp_, n, nn.Parameter(p[self.training_blocks].data))
 
         # create new opt_ with reduced blocks
         self.opt_ = RAdam(self.blockmlp_.parameters(), lr=self.sch.get_last_lr()[0])
@@ -240,6 +242,7 @@ class MINERSystem(LightningModule):
                         self.opt_.state[p_][k] = v[self.training_blocks]
                     else:
                         self.opt_.state[p_][k] = v
+
 
 if __name__ == '__main__':
     hparams = get_opts()

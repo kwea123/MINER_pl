@@ -34,7 +34,7 @@ def get_opts():
     parser.add_argument('--loss_thr', type=float, default=1e-4,
                         help='stop training a block if loss is lower than this')
 
-    parser.add_argument('--val_freq', type=int, default=100,
+    parser.add_argument('--val_freq', type=int, default=50,
                         help='validate (and prune blocks) every N epochs')
     parser.add_argument('--log_image', action='store_true', default=False,
                         help='whether to log image to tensorboard (might be slow for large images)')
