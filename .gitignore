@@ -1,7 +1,7 @@
 ckpts/
 logs/
 images/
-images_/
+meshes/
 *.png
 *.jpg
 *.mp4
