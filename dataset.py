@@ -26,8 +26,6 @@ class ImageDataset(Dataset):
         image = rearrange(image,
                           '(nh ph) (nw pw) c -> (nh nw) (ph pw) c',
                           ph=patch_wh[1], pw=patch_wh[0])
-        # if active_blocks is not None:
-        #     image = image[active_blocks]
         self.rgb = torch.tensor(image)
         if active_blocks is not None:
             self.rgb = self.rgb[active_blocks]
