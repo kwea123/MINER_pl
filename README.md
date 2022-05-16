@@ -32,16 +32,16 @@ Unofficial implementation of [MINER: Multiscale Implicit Neural Representations]
 
 # :key: Training
 
-Pluto example (5.5GB mem required):
+Pluto example (4GB mem required):
 ```python3
 python train.py \
     --image_path images/pluto.png \
     --img_wh 4096 4096 --patch_wh 32 32 --batch_size 256 --n_scales 4 \
-    --num_epochs 500 \
+    --num_epochs 200 200 200 500 \
     --exp_name pluto4k_4scale 
 ```
 
-Tokyo station example (10GB mem required):
+Tokyo station example (8GB mem required):
 ```python3
 python train.py \
     --image_path images/tokyo-station.jpg \
@@ -52,7 +52,10 @@ python train.py \
 
 The original image will be resized to `img_wh` for reconstruction. You need to make sure `img_wh` divided by `2^(n_scales-1)` (the resolution at the coarsest level) is still a multiple of `patch_wh`.
 
-For full options, please see [here](opt.py). If your GPU memory is not enough, try reducing `batch_size`.
+For full options, please see [here](opt.py). Some important options:
+
+*  If your GPU memory is not enough, try reducing `batch_size`.
+*  By default it will not log intermediate images to tensorboard to save time. To visualize image reconstruction and active blocks, add `--log_image` argument.
 
 You are recommended to monitor the training progress by
 ```

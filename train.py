@@ -28,7 +28,7 @@ from torch.optim import RAdam
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
 from pytorch_lightning import LightningModule, Trainer
-from pytorch_lightning.callbacks import ModelCheckpoint, TQDMProgressBar
+from pytorch_lightning.callbacks import TQDMProgressBar
 from pytorch_lightning.loggers import TensorBoardLogger
 
 
@@ -72,22 +72,27 @@ class MINERSystem(LightningModule):
         return out
         
     def setup(self, stage=None):
-        # TODO: use different dataset for train and val
-        # only active blocks for train, and all blocks for val
-        # currently rgb is always all blocks
-        self.dataset = ImageDataset(self.I_j_gt,
-                                    hparams.img_wh,
-                                    hparams.patch_wh)
+        # validation is always the whole image
+        self.val_dataset = ImageDataset(self.I_j_gt,
+                                        hparams.img_wh,
+                                        hparams.patch_wh)
 
     def train_dataloader(self):
-        return DataLoader(self.dataset,
+        # load only active blocks to accelerate
+        active_blocks = self.active_blocks_cpu.clone()
+        active_blocks[self.active_blocks_cpu] = self.training_blocks_cpu
+        train_dataset = ImageDataset(self.I_j_gt,
+                                     hparams.img_wh,
+                                     hparams.patch_wh,
+                                     active_blocks)
+        return DataLoader(train_dataset,
                           shuffle=True,
                           num_workers=0,
                           batch_size=self.hparams.batch_size,
                           pin_memory=True)
 
     def val_dataloader(self):
-        return DataLoader(self.dataset,
+        return DataLoader(self.val_dataset,
                           shuffle=False,
                           num_workers=0,
                           batch_size=self.hparams.batch_size,
@@ -109,11 +114,12 @@ class MINERSystem(LightningModule):
                      on_step=False, on_epoch=True)
             self.first_val = False
 
+        # TODO: train random blocks
         uv = rearrange(batch['uv'], 'p 1 c -> 1 p c')
         uv = repeat(uv, '1 p c -> n p c', n=int(self.n_training_blocks))
         rgb_gt = rearrange(batch['rgb'], 'p n c -> n p c')
         rgb_pred = self(self.blockmlp_, uv, hparams.b_chunk)
-        loss = (rgb_pred-rgb_gt[self.active_blocks][self.training_blocks])**2
+        loss = (rgb_pred-rgb_gt)**2
         loss = loss.mean()
 
         self.opt_.zero_grad()
@@ -151,8 +157,8 @@ class MINERSystem(LightningModule):
     def validation_step(self, batch, batch_idx):
         uv = rearrange(batch['uv'], 'p 1 c -> 1 p c')
         uv = repeat(uv, '1 p c -> n p c', n=int(self.active_blocks.sum()))
-        rgb = rearrange(batch['rgb'], 'p n c -> n p c')
-        return {'rgb_gt': rgb,
+        rgb_gt = rearrange(batch['rgb'], 'p n c -> n p c')
+        return {'rgb_gt': rgb_gt,
                 'rgb_pred': self(self.blockmlp, uv, hparams.b_chunk)}
 
     def validation_epoch_end(self, outputs):
@@ -160,53 +166,53 @@ class MINERSystem(LightningModule):
         rgb_pred = torch.cat([x['rgb_pred'] for x in outputs], 1) # depends on active blocks
 
         # remove converged blocks
-        active_blocks_cpu = self.active_blocks.cpu()
-        loss = reduce((rgb_pred-rgb_gt[active_blocks_cpu])**2,
+        self.active_blocks_cpu = self.active_blocks.cpu()
+        loss = reduce((rgb_pred-rgb_gt[self.active_blocks_cpu])**2,
                       'n p c -> n', 'mean')
-        training_blocks_cpu = loss>hparams.loss_thr
-        self.training_blocks = training_blocks_cpu.to(self.training_blocks.device)
+        self.training_blocks_cpu = loss>hparams.loss_thr
+        self.training_blocks = self.training_blocks_cpu.to(self.training_blocks.device)
         self.n_training_blocks = self.training_blocks.sum().float()
         self.log('val/n_training_blocks', self.n_training_blocks, True)
 
         # visualize training blocks, rgb
         if hparams.level<=hparams.n_scales-2:
             rgb_pred_ = torch.zeros_like(rgb_gt)
-            rgb_pred_[active_blocks_cpu] = rgb_pred
+            rgb_pred_[self.active_blocks_cpu] = rgb_pred
             if hparams.pyr=='gaussian':
-                rgb_pred_[~active_blocks_cpu] = I_j_u_[~active_blocks_cpu]
+                rgb_pred_[~self.active_blocks_cpu] = \
+                    I_j_u_[~self.active_blocks_cpu]
             elif hparams.pyr=='laplacian':
-                lap_gt = reshape_image(rgb_gt, hparams)
-                lap_pred = reshape_image(rgb_pred_, hparams)
-                self.logger.experiment.add_images(
-                    f'laplacian/l{hparams.level}',
-                    torch.cat([(lap_gt+1)/2, (lap_pred+1)/2]), # normalize to [0, 1]
-                    self.current_epoch)
+                if hparams.log_image:
+                    lap_gt = reshape_image(rgb_gt, hparams)
+                    lap_pred = reshape_image(rgb_pred_, hparams)
+                    self.logger.experiment.add_images(
+                        f'laplacian/l{hparams.level}',
+                        torch.cat([(lap_gt+1)/2, (lap_pred+1)/2]),
+                        self.current_epoch)
                 # add upsampled image to laplacian
                 rgb_gt += I_j_u_
                 rgb_pred_ += I_j_u_
             rgb_pred = rgb_pred_
 
-        self.rgb_pred = reshape_image(rgb_pred, hparams)
-        rgb_gt = reshape_image(rgb_gt, hparams)
-        self.rgb_pred = torch.clip(self.rgb_pred, 0, 1)
-        rgb_gt = torch.clip(rgb_gt, 0, 1)
+        self.rgb_pred = torch.clip(reshape_image(rgb_pred, hparams), 0, 1)
+        rgb_gt = torch.clip(reshape_image(rgb_gt, hparams), 0, 1)
 
-        blocks = active_blocks_cpu.clone()
-        if not self.first_val:
-            blocks[active_blocks_cpu] = training_blocks_cpu
-        blocks_v = rearrange(blocks, '(nh nw) -> 1 nh nw',
-                             nh=hparams.nh,
-                             nw=hparams.nw)
-        blocks_v = repeat(blocks_v, '1 nh nw -> 1 (nh ph) (nw pw)',
-                          ph=hparams.patch_wh[1],
-                          pw=hparams.patch_wh[0])
-        self.logger.experiment.add_image(f'training_blocks/l{hparams.level}',
-                                         (rgb_gt[0]+blocks_v)/2,
-                                         self.current_epoch)
-
-        self.logger.experiment.add_images(f'image/l{hparams.level}',
-                                          torch.cat([rgb_gt, self.rgb_pred]),
-                                          self.current_epoch)
+        if hparams.log_image:
+            blocks = self.active_blocks_cpu.clone()
+            if not self.first_val:
+                blocks[self.active_blocks_cpu] = self.training_blocks_cpu
+            blocks_v = rearrange(blocks, '(nh nw) -> 1 nh nw',
+                                 nh=hparams.nh,
+                                 nw=hparams.nw)
+            blocks_v = repeat(blocks_v, '1 nh nw -> 1 (nh ph) (nw pw)',
+                              ph=hparams.patch_wh[1],
+                              pw=hparams.patch_wh[0])
+            self.logger.experiment.add_image(f'training_blocks/l{hparams.level}',
+                                             (rgb_gt[0]+blocks_v)/2,
+                                             self.current_epoch)
+            self.logger.experiment.add_images(f'image/l{hparams.level}',
+                                              torch.cat([rgb_gt, self.rgb_pred]),
+                                              self.current_epoch)
 
         self.psnr_ = psnr(self.rgb_pred, rgb_gt)
         self.log('val/psnr', self.psnr_, True)
@@ -303,8 +309,8 @@ if __name__ == '__main__':
                           devices=1,
                           num_sanity_val_steps=-1, # validate the whole image once before training
                           log_every_n_steps=1,
-                          check_val_every_n_epoch=hparams.val_freq,
-                          benchmark=True)
+                          reload_dataloaders_every_n_epochs=1,
+                          check_val_every_n_epoch=hparams.val_freq)
         trainer.fit(system)
 
         # upsample the predicted image for the next level

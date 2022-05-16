@@ -35,7 +35,9 @@ def get_opts():
                         help='stop training a block if loss is lower than this')
 
     parser.add_argument('--val_freq', type=int, default=100,
-                        help='validate every N epochs')
+                        help='validate (and prune blocks) every N epochs')
+    parser.add_argument('--log_image', action='store_true', default=False,
+                        help='whether to log image to tensorboard (might be slow for large images)')
     parser.add_argument('--exp_name', type=str, default='exp',
                         help='experiment name')
 
