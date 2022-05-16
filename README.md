@@ -60,8 +60,10 @@ python train.py \
 | Tokyo station (6000x4000) | 68 | 6819 | 35.4 | 42.48 |
 | Shibuya (7168x2560) | 101 | 8967 | 17.73 | 37.78 |
 | Shibuya (14336x5120) | 372 | 8847 | 75.42 | 39.32 |
-| Shibuya (28672x10240) | 1029 | 9007 | 508.12 | 41.92 |
+| Shibuya (28672x10240) | 890 | 10255 | 277.37 | 41.93 |
+| Shibuya (28672x10240)* | 1244 | 6277 | 98.7 | 37.59 |
 
+*paper settings (6 scales, each network has 4 layer with 9 hidden units)
 
 The original image will be resized to `img_wh` for reconstruction. You need to make sure `img_wh` divided by `2^(n_scales-1)` (the resolution at the coarsest level) is still a multiple of `patch_wh`.
 
