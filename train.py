@@ -83,7 +83,7 @@ class MINERSystem(LightningModule):
     def setup(self, stage=None):
         # validation is always the whole image
         self.val_dataset = ImageDataset(self.I_j_gt,
-                                        hparams.img_wh,
+                                        hparams.subimg_wh,
                                         hparams.patch_wh)
 
     def train_dataloader(self):
@@ -91,7 +91,7 @@ class MINERSystem(LightningModule):
         active_blocks = self.active_blocks_cpu.clone()
         active_blocks[self.active_blocks_cpu] = self.training_blocks_cpu
         train_dataset = ImageDataset(self.I_j_gt,
-                                     hparams.img_wh,
+                                     hparams.subimg_wh,
                                      hparams.patch_wh,
                                      active_blocks)
         return DataLoader(train_dataset,
@@ -229,11 +229,12 @@ class MINERSystem(LightningModule):
 
     def on_validation_end(self):
         # save checkpoint
-        os.makedirs(f'ckpts/{hparams.exp_name}/l{j}', exist_ok=True)
+        ckpt_path = f'ckpts/{hparams.exp_name}/subimg{hparams.subimg_idx:03d}'
+        os.makedirs(ckpt_path, exist_ok=True)
         state_dict = self.blockmlp.state_dict()
         state_dict['active_blocks'] = self.active_blocks
         state_dict['training_blocks'] = self.training_blocks
-        torch.save(state_dict, f'ckpts/{hparams.exp_name}/l{j}/last.ckpt')
+        torch.save(state_dict, f'{ckpt_path}/l{j}.ckpt')
 
         # create new blockmlp_ with reduced blocks
         for n, p in self.blockmlp.named_parameters():
@@ -254,9 +255,13 @@ class MINERSystem(LightningModule):
 
 if __name__ == '__main__':
     hparams = get_opts()
-    assert hparams.img_wh[0]%(hparams.patch_wh[0]*2**(hparams.n_scales-1))==0 and \
-           hparams.img_wh[1]%(hparams.patch_wh[1]*2**(hparams.n_scales-1))==0, \
-           'img_wh must be a multiple of patch_wh*2**(n_scales-1)!'
+    if hparams.img_wh[0]%hparams.subimg_wh[0]!=0 or \
+       hparams.img_wh[1]%hparams.subimg_wh[1]!=0:
+        print('subimg_wh is wrong! Setting it to img_wh ...')
+        hparams.subimg_wh = hparams.img_wh
+    assert hparams.subimg_wh[0]%(hparams.patch_wh[0]*2**(hparams.n_scales-1))==0 and \
+           hparams.subimg_wh[1]%(hparams.patch_wh[1]*2**(hparams.n_scales-1))==0, \
+           'subimg_wh must be a multiple of patch_wh*2**(n_scales-1)!'
     assert hparams.num_epochs[-1]%hparams.val_freq==0, \
            'last num_epochs must be a multiple of val_freq!'
     hparams.batch_size = min(hparams.batch_size,
@@ -264,70 +269,92 @@ if __name__ == '__main__':
     num_epochs = hparams.num_epochs[::-1]
 
     # load image of the original scale once
-    image = np.float32(Image.open(hparams.image_path).convert('RGB'))/255.
+    orig_image = np.float32(Image.open(hparams.image_path).convert('RGB'))/255.
+    orig_image = cv2.resize(orig_image, (hparams.img_wh[0], hparams.img_wh[1]))
 
-    # train n_scales progressively.
-    for j in reversed(range(hparams.n_scales)): # J-1 ~ 0 coarse to fine
-        hparams.level = j
-        hparams.final_act = 'sigmoid'
+    # split into sub-images
+    nw_sub = hparams.img_wh[0]//hparams.subimg_wh[0]
+    nh_sub = hparams.img_wh[1]//hparams.subimg_wh[1]
+    sub_images = rearrange(orig_image,
+                           '(nh ph) (nw pw) c -> (nh nw) ph pw c',
+                           nh=nh_sub, nw=nw_sub,
+                           ph=hparams.subimg_wh[1], pw=hparams.subimg_wh[0])
+    del orig_image
 
-        I_j_gt = cv2.resize(image,
-                    (hparams.img_wh[0]//(2**j), hparams.img_wh[1]//(2**j)))
-        # number of horizontal and vertical blocks
-        hparams.nh = hparams.img_wh[1]//(hparams.patch_wh[1]*2**j)
-        hparams.nw = hparams.img_wh[0]//(hparams.patch_wh[0]*2**j)
-        if j <= hparams.n_scales-2:
-            I_j_u_ = rearrange(I_j_u,
-                               '1 c (nh ph) (nw pw) -> (nh nw) (ph pw) c',
-                               nh=hparams.nh,
-                               nw=hparams.nw)
-            I_j_gt_ = rearrange(I_j_gt, '(nh ph) (nw pw) c -> (nh nw) (ph pw) c',
+    sub_psnrs = []
+
+    # train each sub-image independently
+    for i in range(nw_sub*nh_sub):
+        image = sub_images[0]
+        sub_images = sub_images[1:] # pop the first image and remove it to save memory
+        # train n_scales progressively
+        for j in reversed(range(hparams.n_scales)): # J-1 ~ 0 coarse to fine
+            hparams.subimg_idx = i
+            hparams.level = j
+            hparams.final_act = 'sigmoid'
+
+            I_j_gt = cv2.resize(image,
+                        (hparams.subimg_wh[0]//(2**j), hparams.subimg_wh[1]//(2**j)))
+            # number of horizontal and vertical blocks
+            hparams.nh = hparams.subimg_wh[1]//(hparams.patch_wh[1]*2**j)
+            hparams.nw = hparams.subimg_wh[0]//(hparams.patch_wh[0]*2**j)
+            if j <= hparams.n_scales-2:
+                I_j_u_ = rearrange(I_j_u,
+                                '1 c (nh ph) (nw pw) -> (nh nw) (ph pw) c',
                                 nh=hparams.nh,
                                 nw=hparams.nw)
-            I_j_gt_ = torch.tensor(I_j_gt_, dtype=I_j_u.dtype, device=I_j_u.device)
-            residual = I_j_gt_-I_j_u_
-            # compute active blocks
-            loss = reduce(residual**2, 'n p c -> n', 'mean')
-            active_blocks = loss>hparams.loss_thr
-            hparams.n_blocks = active_blocks.sum().item()
-            if hparams.pyr=='laplacian': # compute residual
-                scales = reduce(torch.abs(residual[active_blocks]),
-                                'n p c -> n 1 1', 'max')
-                I_j_gt -= rearrange(I_j_u.cpu().numpy(), '1 c h w -> h w c')
-                hparams.final_act = 'sin'
-        else: # coarsest level
-            hparams.n_blocks = hparams.nh*hparams.nw
-            active_blocks = torch.ones(hparams.n_blocks, dtype=torch.bool)
+                I_j_gt_ = rearrange(I_j_gt, '(nh ph) (nw pw) c -> (nh nw) (ph pw) c',
+                                    nh=hparams.nh,
+                                    nw=hparams.nw)
+                I_j_gt_ = torch.tensor(I_j_gt_, dtype=I_j_u.dtype, device=I_j_u.device)
+                residual = I_j_gt_-I_j_u_
+                # compute active blocks
+                loss = reduce(residual**2, 'n p c -> n', 'mean')
+                active_blocks = loss>hparams.loss_thr
+                hparams.n_blocks = active_blocks.sum().item()
+                if hparams.pyr=='laplacian': # compute residual
+                    scales = reduce(torch.abs(residual[active_blocks]),
+                                    'n p c -> n 1 1', 'max')
+                    I_j_gt -= rearrange(I_j_u.cpu().numpy(), '1 c h w -> h w c')
+                    hparams.final_act = 'sin'
+            else: # coarsest level
+                hparams.n_blocks = hparams.nh*hparams.nw
+                active_blocks = torch.ones(hparams.n_blocks, dtype=torch.bool)
 
-        system = MINERSystem(hparams)
-        system.register_buffer("active_blocks", active_blocks)
-        system.I_j_gt = I_j_gt
-        if j<=hparams.n_scales-2 and hparams.pyr=='laplacian':
-            system.I_j_u_ = I_j_u_
-            system.register_buffer("scales", scales)
+            system = MINERSystem(hparams)
+            system.register_buffer("active_blocks", active_blocks)
+            system.I_j_gt = I_j_gt
+            if j<=hparams.n_scales-2 and hparams.pyr=='laplacian':
+                system.I_j_u_ = I_j_u_
+                system.register_buffer("scales", scales)
 
-        pbar = TQDMProgressBar(refresh_rate=1)
-        callbacks = [pbar]
+            pbar = TQDMProgressBar(refresh_rate=1)
+            callbacks = [pbar]
 
-        logger = TensorBoardLogger(save_dir='logs',
-                                   name=f'{hparams.exp_name}/l{j}',
-                                   default_hp_metric=False)
+            logger = TensorBoardLogger(save_dir='logs',
+                                       name=f'{hparams.exp_name}/subimg{i:03d}/l{j}',
+                                       default_hp_metric=False)
 
-        hparams.num_epochs = num_epochs[min(j, len(num_epochs)-1)]
-        trainer = Trainer(max_epochs=hparams.num_epochs,
-                          callbacks=callbacks,
-                          logger=logger,
-                          enable_model_summary=True,
-                          accelerator='auto',
-                          devices=1,
-                          num_sanity_val_steps=-1, # validate the whole image once before training
-                          log_every_n_steps=1,
-                          reload_dataloaders_every_n_epochs=1,
-                          check_val_every_n_epoch=hparams.val_freq if j==0 else hparams.num_epochs)
-        trainer.fit(system)
+            hparams.num_epochs = num_epochs[min(j, len(num_epochs)-1)]
+            trainer = Trainer(max_epochs=hparams.num_epochs,
+                              callbacks=callbacks,
+                              logger=logger,
+                              enable_model_summary=True,
+                              accelerator='auto',
+                              devices=1,
+                              num_sanity_val_steps=-1, # validate the whole image once before training
+                              log_every_n_steps=1,
+                              reload_dataloaders_every_n_epochs=1,
+                              check_val_every_n_epoch=hparams.val_freq if j==0 else hparams.num_epochs)
+            trainer.fit(system)
 
-        # upsample the predicted image for the next level
-        I_j_u = F.interpolate(system.rgb_pred,
-                              mode='bilinear',
-                              scale_factor=2,
-                              align_corners=True)
+            # upsample the predicted image for the next level
+            I_j_u = F.interpolate(system.rgb_pred,
+                                  mode='bilinear',
+                                  scale_factor=2,
+                                  align_corners=True)
+
+        # compute the psnr for this sub-image
+        sub_psnrs += [psnr(rearrange(system.rgb_pred.numpy(), '1 c h w -> h w c'), image)]
+
+    print(f'PSNR : {np.mean(sub_psnrs):.2f} dB')
