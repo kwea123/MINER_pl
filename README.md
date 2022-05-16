@@ -36,7 +36,7 @@ Unofficial implementation of [MINER: Multiscale Implicit Neural Representations]
 Pluto example:
 ```python3
 python train.py \
-    --image_path images/pluto.png \
+    --task image --path images/pluto.png \
     --img_wh 4096 4096 --patch_wh 32 32 --batch_size 256 --n_scales 4 \
     --use_pe --n_freq 4 --n_layers 3 \
     --num_epochs 50 50 50 200 \
@@ -46,7 +46,7 @@ python train.py \
 Tokyo station example:
 ```python3
 python train.py \
-    --image_path images/tokyo-station.jpg \
+    --task image --path images/tokyo-station.jpg \
     --img_wh 6000 4000 --patch_wh 25 25 --batch_size 192 --n_scales 5 \
     --use_pe --n_freq 4 --n_layers 3 \
     --num_epochs 50 50 50 50 150 \
