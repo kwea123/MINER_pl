@@ -37,7 +37,7 @@ Pluto example:
 python train.py \
     --image_path images/pluto.png \
     --img_wh 4096 4096 --patch_wh 32 32 --batch_size 256 --n_scales 4 \
-    --num_epochs 200 200 200 500 \
+    --num_epochs 50 50 50 200 \
     --exp_name pluto4k_4scale 
 ```
 
@@ -46,14 +46,14 @@ Tokyo station example:
 python train.py \
     --image_path images/tokyo-station.jpg \
     --img_wh 6000 4000 --patch_wh 25 25 --batch_size 192 --n_scales 5 \
-    --num_epochs 200 200 200 200 500 \
+    --num_epochs 50 50 50 50 150 \
     --exp_name tokyo6k_5scale 
 ```
 
 | Image (size) | Training time (s) | Max GPU mem (MiB) | PSNR |
 |:---:|:---:|:---:|:---:|
-| Pluto (4096x4096) | 153 | 3473 | 42.50 |
-| Tokyo station (6000x4000) | 283 | 7993 | 41.68 |
+| Pluto (4096x4096) | 65 | 3473 | 41.20 |
+| Tokyo station (6000x4000) | 89 | 7993 | 42.17 |
 
 
 The original image will be resized to `img_wh` for reconstruction. You need to make sure `img_wh` divided by `2^(n_scales-1)` (the resolution at the coarsest level) is still a multiple of `patch_wh`.
