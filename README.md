@@ -32,7 +32,7 @@ Unofficial implementation of [MINER: Multiscale Implicit Neural Representations]
 
 # :key: Training
 
-Pluto example (4GB mem required):
+Pluto example:
 ```python3
 python train.py \
     --image_path images/pluto.png \
@@ -41,14 +41,20 @@ python train.py \
     --exp_name pluto4k_4scale 
 ```
 
-Tokyo station example (8GB mem required):
+Tokyo station example:
 ```python3
 python train.py \
     --image_path images/tokyo-station.jpg \
     --img_wh 6000 4000 --patch_wh 25 25 --batch_size 192 --n_scales 5 \
-    --num_epochs 500 \
-    --exp_name tokyo4k_5scale 
+    --num_epochs 200 200 200 200 500 \
+    --exp_name tokyo6k_5scale 
 ```
+
+| Image (size) | Training time (s) | Max GPU mem (MiB) | PSNR |
+|:---:|:---:|:---:|:---:|
+| Pluto (4096x4096) | 166 | 3473 | 41.09 |
+| Tokyo station (6000x4000) | 283 | 7993 | 41.68 |
+
 
 The original image will be resized to `img_wh` for reconstruction. You need to make sure `img_wh` divided by `2^(n_scales-1)` (the resolution at the coarsest level) is still a multiple of `patch_wh`.
 
