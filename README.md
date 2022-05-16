@@ -56,6 +56,7 @@ python train.py \
 | Image (size) | Training time (s) | Max GPU mem (MiB) | PSNR |
 |:---:|:---:|:---:|:---:|
 | Pluto (4096x4096) | 55 | 3171 | 42.11 |
+| Pluto (8192x8192) | 106 | 6099 | 45.09 |
 | Tokyo station (6000x4000) | 68 | 6819 | 42.48 |
 | Shibuya (14080x5120) | 341 | 8847 | 39.29 |
 
