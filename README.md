@@ -53,12 +53,14 @@ python train.py \
     --exp_name tokyo6k_5scale 
 ```
 
-| Image (size) | Training time (s) | Max GPU mem (MiB) | PSNR |
+| Image (size) | Train time (s) | GPU mem (MiB) | #Params (M) | PSNR |
 |:---:|:---:|:---:|:---:|
-| Pluto (4096x4096) | 55 | 3171 | 42.11 |
-| Pluto (8192x8192) | 106 | 6099 | 45.09 |
-| Tokyo station (6000x4000) | 68 | 6819 | 42.48 |
-| Shibuya (14080x5120) | 341 | 8847 | 39.29 |
+| Pluto (4096x4096) | 53 | 3171 | 9.16 | 42.14 |
+| Pluto (8192x8192) | 106 | 6099 | 28.05 | 45.09 |
+| Tokyo station (6000x4000) | 68 | 6819 | 35.4 | 42.48 |
+| Shibuya (7168x2560) | 101 | 8967 | 17.73 | 37.78 |
+| Shibuya (14336x5120) | 372 | 8847 | 75.42 | 39.32 |
+| Shibuya (28672x10240) | 1029 | 9007 | 508.12 | 41.92 |
 
 
 The original image will be resized to `img_wh` for reconstruction. You need to make sure `img_wh` divided by `2^(n_scales-1)` (the resolution at the coarsest level) is still a multiple of `patch_wh`.
@@ -104,4 +106,12 @@ To reconstruct the image using trained model, see [test.ipynb](test.ipynb). -->
 
 # :question: Further readings
 
-I observed
+During a stream, my audience suggested me to test on this image with random pixels:
+
+![random](https://user-images.githubusercontent.com/11364490/168567099-56c226a8-9f79-4710-9291-cc7ecef26f6d.png)
+
+The default `32x32` patch size doesn't work well, since the texture varies too quickly inside a patch. Decreasing to `16x16` with other default parameters make the network converge right away to `43.91 dB` under a minute. Surprisingly, with the other image reconstruction SOTA [instant-ngp](https://github.com/NVlabs/instant-ngp#image-of-einstein), the network is stuck at `17 dB` no matter how long I train.
+
+![ngp-random](https://user-images.githubusercontent.com/11364490/168567783-40a9c123-01af-472c-9885-e52a778df18e.png)
+
+Is this a possible weakness of instant-ngp? What effect could it bring to real application? You are welcome to test other methods to reconstruct this image!
