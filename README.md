@@ -89,7 +89,7 @@ Examples:
 
 # :mag_right: Testing
 
-To reconstruct the image using trained model, see [test.ipynb](test.ipynb).
+To reconstruct the image using trained model, see [image_test.ipynb](image_test.ipynb).
 
 Pretrained models can be downloaded from [releases](https://github.com/kwea123/MINER_pl/releases).
 
