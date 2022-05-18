@@ -1,5 +1,6 @@
 import torch
 from torch import nn
+import numpy as np
 
 
 @torch.jit.script
@@ -18,7 +19,7 @@ class PE(nn.Module):
     """
     def __init__(self, P):
         """
-        P: (2, F) encoding matrix
+        P: (d, F) encoding matrix
         """
         super().__init__()
         self.register_buffer("P", P)
@@ -29,7 +30,7 @@ class PE(nn.Module):
 
     def forward(self, x):
         """
-        x: (n_blocks, B, 2)
+        x: (n_blocks, B, d)
         """
         x_ = x @ self.P # (n_blocks, B, F)
         return torch.cat([torch.sin(x_), torch.cos(x_)], -1) # (n_blocks, B, 2*F)
@@ -51,18 +52,18 @@ class BlockMLP(nn.Module):
             if i == 0: # first layer
                 wi = nn.Parameter(torch.empty(n_blocks, n_in, n_hidden))
                 bi = nn.Parameter(torch.empty(n_blocks, 1, n_hidden))
-                setattr(self, f'a{i}', nn.Parameter(a*torch.ones(n_blocks, 1, 1)))
+                ai = nn.Parameter(a*torch.ones(n_blocks, 1, 1))
             elif i < n_layers-1: # middle layers
                 wi = nn.Parameter(torch.empty(n_blocks, n_hidden, n_hidden))
                 bi = nn.Parameter(torch.empty(n_blocks, 1, n_hidden))
-                setattr(self, f'a{i}', nn.Parameter(a*torch.ones(n_blocks, 1, 1)))
+                ai = nn.Parameter(a*torch.ones(n_blocks, 1, 1))
             else: # last layer
                 wi = nn.Parameter(torch.empty(n_blocks, n_hidden, n_out))
                 bi = nn.Parameter(torch.empty(n_blocks, 1, n_out))
                 if final_act == 'sigmoid':
-                    setattr(self, f'a{i}', nn.Sigmoid())
+                    ai = nn.Sigmoid()
                 elif final_act == 'sin':
-                    setattr(self, f'a{i}', nn.Parameter(a*torch.ones(n_blocks, 1, 1)))
+                    ai = nn.Parameter(a*torch.ones(n_blocks, 1, 1))
 
             # layer initialization
             if i == 0:
@@ -72,15 +73,15 @@ class BlockMLP(nn.Module):
                 nn.init.uniform_(wi, -1/(n_hidden**0.5), 1/(n_hidden**0.5))
                 nn.init.uniform_(bi, -1/(n_hidden**0.5), 1/(n_hidden**0.5))
 
-            self.register_parameter(f'w{i}', wi)
-            self.register_parameter(f'b{i}', bi)
+            setattr(self, f'w{i}', wi)
+            setattr(self, f'b{i}', bi)
+            setattr(self, f'a{i}', ai)
 
-    def forward(self, x, b_chunks=16384, to_cpu=False):
+    def forward(self, x, b_chunks=16384):
         """
         Inputs:
             x: (n_blocks, B, n_in)
             b_chunks: int, @x is split into chunks of at most @b_chunks blocks
-            to_cpu: pass to CPU per chunk to decrease GPU usage. In val only.
         
         Outputs:
             (n_blocks, B, n_out)
@@ -99,7 +100,5 @@ class BlockMLP(nn.Module):
                         x_ = ai(x_@wi+bi)
                     elif self.final_act == 'sin':
                         x_ = scaledsin_activation(x_@wi+bi, ai[c:c+b_chunks])
-            if to_cpu:
-                x_ = x_.cpu()
             out += [x_]
         return torch.cat(out)

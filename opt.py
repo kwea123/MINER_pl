@@ -4,20 +4,16 @@ def get_opts():
     parser = argparse.ArgumentParser()
 
     parser.add_argument('--task', type=str, default='image',
-                        choices=['image'],
+                        choices=['image', 'occ'],
                         help='which task to perform')
     parser.add_argument('--path', type=str, default='images/pluto.png',
                         help='path to the object to reconstruct')
-    parser.add_argument('--patch_wh', nargs="+", type=int, default=[32, 32],
-                        help='resolution (w, h) of each patch')
+    parser.add_argument('--patch_size', nargs="+", type=int, default=[32, 32],
+                        help='resolution of each patch')
     parser.add_argument('--n_scales', type=int, default=1,
                         help='number of laplacian pyramid levels')
-    parser.add_argument('--img_wh', nargs="+", type=int, default=[512, 512],
-                        help='resolution (img_w, img_h) of the image')
-    parser.add_argument('--subimg_wh', nargs="+", type=int, default=[1000000, 1000000],
-                        help='''split the resized image into this wh and train
-                        them independently, 
-                        must be a multiple of patch_wh*2**(n_scales-1)''')
+    parser.add_argument('--input_size', nargs="+", type=int, default=[512, 512],
+                        help='resolution of the input')
     parser.add_argument('--pyr', type=str, default='laplacian',
                         choices=['gaussian', 'laplacian'],
                         help='use which image pyramid')
@@ -46,6 +42,7 @@ def get_opts():
 
     parser.add_argument('--val_freq', type=int, default=50,
                         help='validate (and prune blocks) every N epochs')
+    # only for task==image
     parser.add_argument('--log_image', action='store_true', default=False,
                         help='whether to log image to tensorboard (might be slow for large images)')
     parser.add_argument('--exp_name', type=str, default='exp',

@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 import torch.nn.functional as F
-from einops import rearrange, reduce, repeat
+from einops import reduce, repeat
 from PIL import Image
 Image.MAX_IMAGE_PIXELS = None # enable reading large image
 import numpy as np
@@ -14,14 +14,15 @@ warnings.filterwarnings("ignore")
 from opt import get_opts
 
 # datasets
-from datasets import dataset_dict
+from dataset import CoordinateDataset
 from torch.utils.data import DataLoader
 
 # models
 from models import PE, BlockMLP
+from patterns import patterns_dict, einops_f
 
 # metrics
-from metrics import psnr
+from metrics import mse, psnr
 
 # optimizer
 from torch.optim import RAdam
@@ -32,34 +33,29 @@ from pytorch_lightning.callbacks import TQDMProgressBar
 from pytorch_lightning.loggers import TensorBoardLogger
 
 
-def reshape_image(image, hparams):
-    # reshape image for visualization
-    return rearrange(image, '(nh nw) (ph pw) c -> 1 c (nh ph) (nw pw)',
-                     nh=hparams.nh,
-                     nw=hparams.nw,
-                     ph=hparams.patch_wh[1],
-                     pw=hparams.patch_wh[0])
-
-
 class MINERSystem(LightningModule):
     def __init__(self, hparams):
         super().__init__()
         self.save_hyperparameters(hparams)
         self.first_val = True
         self.automatic_optimization = False
-        self.dataset = dataset_dict[hparams.task]
+
+        if hparams.task=='image':
+            n_in = 2 # uv
+            n_out = 3 # rgb
+        elif hparams.task=='occ':
+            n_in = 3 # xyz
+            n_out = 1 # occ
 
         if hparams.use_pe:
-            P = torch.cat([torch.eye(2)*2**i for i in range(hparams.n_freq)], 1)
+            P = torch.cat([torch.eye(n_in)*2**i for i in range(hparams.n_freq)], 1)
             self.pe = PE(P)
             n_in = self.pe.out_dim
-        else:
-            n_in = 2
 
         # create two copies of the same network
         # the network used in training
         self.blockmlp_ = BlockMLP(n_blocks=hparams.n_blocks, 
-                                  n_in=n_in, n_out=3,
+                                  n_in=n_in, n_out=n_out,
                                   n_layers=hparams.n_layers,
                                   n_hidden=hparams.n_hidden,
                                   final_act=hparams.final_act,
@@ -70,31 +66,31 @@ class MINERSystem(LightningModule):
         self.register_buffer('training_blocks',
                              torch.ones(hparams.n_blocks, dtype=torch.bool))
 
-    def forward(self, model, x, b_chunks):
+    def call(self, model, x, b_chunks):
         if hparams.use_pe:
             x = self.pe(x)
-        out = model(x, b_chunks, not self.blockmlp.training)
+        out = model(x, b_chunks)
         if hparams.level<=hparams.n_scales-2 and hparams.pyr=='laplacian':
             if self.blockmlp.training:
                 out *= self.scales[self.training_blocks]
             else:
-                out *= self.scales.cpu()
+                out *= self.scales
         return out
         
     def setup(self, stage=None):
-        # validation is always the whole image
-        self.val_dataset = self.dataset(self.I_j_gt,
-                                        hparams.subimg_wh,
-                                        hparams.patch_wh)
+        # validation is always the whole data
+        self.val_dataset = CoordinateDataset(
+                                self.I_j_gt,
+                                hparams)
 
     def train_dataloader(self):
         # load only active blocks to accelerate
-        active_blocks = self.active_blocks_cpu.clone()
-        active_blocks[self.active_blocks_cpu] = self.training_blocks_cpu
-        train_dataset = self.dataset(self.I_j_gt,
-                                     hparams.subimg_wh,
-                                     hparams.patch_wh,
-                                     active_blocks)
+        active_blocks = self.active_blocks.clone()
+        active_blocks[self.active_blocks] = self.training_blocks
+        train_dataset = CoordinateDataset(
+                            self.I_j_gt,
+                            hparams,
+                            active_blocks.cpu())
         return DataLoader(train_dataset,
                           shuffle=True,
                           num_workers=0,
@@ -124,12 +120,12 @@ class MINERSystem(LightningModule):
                      on_step=False, on_epoch=True)
             self.first_val = False
 
-        uv = rearrange(batch['uv'], 'p 1 c -> 1 p c')
+        uv = einops_f(batch['in'], 'p 1 c -> 1 p c')
         uv = repeat(uv, '1 p c -> n p c', n=int(self.n_training_blocks))
-        rgb_gt = rearrange(batch['rgb'], 'p n c -> n p c')
-        rgb_pred = self(self.blockmlp_, uv, hparams.b_chunk)
-        mse = (rgb_pred-rgb_gt)**2
-        loss = reduce(mse, 'n p c -> n', 'mean')
+        gt = einops_f(batch['out'], 'p n c -> n p c')
+        pred = self.call(self.blockmlp_, uv, hparams.b_chunk)
+        mse_ = mse(pred, gt, reduction='none')
+        loss = reduce(mse_, 'n p c -> n', 'mean')
         # heuristics: easier blocks have higher weights (make them converge faster)
         weight = 1/(loss.detach()+1e-8)
 
@@ -138,7 +134,7 @@ class MINERSystem(LightningModule):
         self.opt_.step()
 
         self.log('lr', self.opt_.param_groups[0]['lr'])
-        self.log('train/loss', mse.mean(), True)
+        self.log('train/loss', mse_.mean(), True)
 
         if self.trainer.is_last_batch:
             # update opt_'s lr by the scheduler
@@ -166,71 +162,68 @@ class MINERSystem(LightningModule):
                         self.opt.state[p][k] = v
 
     def validation_step(self, batch, batch_idx):
-        uv = rearrange(batch['uv'], 'p 1 c -> 1 p c')
+        uv = einops_f(batch['in'], 'p 1 c -> 1 p c')
         uv = repeat(uv, '1 p c -> n p c', n=int(self.active_blocks.sum()))
-        rgb_gt = rearrange(batch['rgb'], 'p n c -> n p c')
-        return {'rgb_gt': rgb_gt,
-                'rgb_pred': self(self.blockmlp, uv, hparams.b_chunk)}
+        gt = einops_f(batch['out'], 'p n c -> n p c')
+        pred = self.call(self.blockmlp, uv, hparams.b_chunk)
+
+        return {'gt': gt, 'pred': pred}
 
     def validation_epoch_end(self, outputs):
-        rgb_gt = torch.cat([x['rgb_gt'] for x in outputs], 1).cpu() # always all blocks
-        rgb_pred = torch.cat([x['rgb_pred'] for x in outputs], 1) # depends on active blocks
+        gt = torch.cat([x['gt'] for x in outputs], 1) # always all blocks
+        pred = torch.cat([x['pred'] for x in outputs], 1) # depends on active blocks
 
         # remove converged blocks
-        self.active_blocks_cpu = self.active_blocks.cpu()
-        loss = reduce((rgb_pred-rgb_gt[self.active_blocks_cpu])**2,
-                      'n p c -> n', 'mean')
-        self.training_blocks_cpu = loss>hparams.loss_thr
-        self.training_blocks = self.training_blocks_cpu.to(self.training_blocks.device)
+        mse_ = mse(pred, gt[self.active_blocks], reduction='none')
+        loss = reduce(mse_, 'n p c -> n', 'mean')
+        self.training_blocks = loss>hparams.loss_thr
         self.n_training_blocks = self.training_blocks.sum().float()
         self.log('val/n_training_blocks', self.n_training_blocks, True)
 
         # visualize training blocks, rgb
         if hparams.level<=hparams.n_scales-2:
-            rgb_pred_ = torch.zeros_like(rgb_gt)
-            rgb_pred_[self.active_blocks_cpu] = rgb_pred
+            rgb_pred_ = torch.zeros_like(gt)
+            rgb_pred_[self.active_blocks] = pred
             if hparams.pyr=='gaussian':
-                rgb_pred_[~self.active_blocks_cpu] = \
-                    I_j_u_[~self.active_blocks_cpu]
+                rgb_pred_[~self.active_blocks] = I_j_u_[~self.active_blocks]
             elif hparams.pyr=='laplacian':
-                if hparams.log_image:
-                    lap_gt = reshape_image(rgb_gt, hparams)
-                    lap_pred = reshape_image(rgb_pred_, hparams)
+                if hparams.task=='image' and hparams.log_image:
+                    lap_gt = einops_f(gt, hparams.patterns['reshape'][4], hparams)
+                    lap_pred = einops_f(rgb_pred_, hparams.patterns['reshape'][4],
+                                       hparams)
                     self.logger.experiment.add_images(
                         f'laplacian/l{hparams.level}',
                         torch.cat([(lap_gt+1)/2, (lap_pred+1)/2]),
                         self.current_epoch)
-                # add upsampled image to laplacian
-                rgb_gt += I_j_u_
+                # add upsampled pred to laplacian
+                gt += I_j_u_
                 rgb_pred_ += I_j_u_
-            rgb_pred = rgb_pred_
+            pred = rgb_pred_
 
-        self.rgb_pred = torch.clip(reshape_image(rgb_pred, hparams), 0, 1)
-        rgb_gt = torch.clip(reshape_image(rgb_gt, hparams), 0, 1)
+        self.pred = torch.clip(einops_f(pred, hparams.patterns['reshape'][4], hparams), 0, 1)
+        gt = torch.clip(einops_f(gt, hparams.patterns['reshape'][4], hparams), 0, 1)
 
-        if hparams.log_image:
-            blocks = self.active_blocks_cpu.clone()
+        if hparams.task=='image' and hparams.log_image:
+            blocks = self.active_blocks.clone()
             if not self.first_val:
-                blocks[self.active_blocks_cpu] = self.training_blocks_cpu
-            blocks_v = rearrange(blocks, '(nh nw) -> 1 nh nw',
-                                 nh=hparams.nh,
-                                 nw=hparams.nw)
-            blocks_v = repeat(blocks_v, '1 nh nw -> 1 (nh ph) (nw pw)',
-                              ph=hparams.patch_wh[1],
-                              pw=hparams.patch_wh[0])
+                blocks[self.active_blocks] = self.training_blocks
+            blocks_v = einops_f(blocks, hparams.patterns['reshape'][5], hparams)
+            blocks_v = einops_f(blocks_v, hparams.patterns['reshape'][6],
+                                hparams, repeat)
             self.logger.experiment.add_image(f'training_blocks/l{hparams.level}',
-                                             (rgb_gt[0]+blocks_v)/2,
+                                             (gt[0]+blocks_v)/2,
                                              self.current_epoch)
             self.logger.experiment.add_images(f'image/l{hparams.level}',
-                                              torch.cat([rgb_gt, self.rgb_pred]),
+                                              torch.cat([gt, self.pred]),
                                               self.current_epoch)
 
-        self.psnr_ = psnr(self.rgb_pred, rgb_gt)
-        self.log('val/psnr', self.psnr_, True)
+        if hparams.task == 'image':
+            self.psnr_ = psnr(self.pred, gt)
+            self.log('val/psnr', self.psnr_, True)
 
     def on_validation_end(self):
         # save checkpoint
-        ckpt_path = f'ckpts/{hparams.exp_name}/subimg{hparams.subimg_idx:03d}'
+        ckpt_path = f'ckpts/{hparams.exp_name}'
         os.makedirs(ckpt_path, exist_ok=True)
         state_dict = self.blockmlp.state_dict()
         state_dict['active_blocks'] = self.active_blocks
@@ -258,106 +251,95 @@ class MINERSystem(LightningModule):
 
 if __name__ == '__main__':
     hparams = get_opts()
-    if hparams.img_wh[0]%hparams.subimg_wh[0]!=0 or \
-       hparams.img_wh[1]%hparams.subimg_wh[1]!=0:
-        print('subimg_wh is wrong! Setting it to img_wh ...')
-        hparams.subimg_wh = hparams.img_wh
-    assert hparams.subimg_wh[0]%(hparams.patch_wh[0]*2**(hparams.n_scales-1))==0 and \
-           hparams.subimg_wh[1]%(hparams.patch_wh[1]*2**(hparams.n_scales-1))==0, \
-           'subimg_wh must be a multiple of patch_wh*2**(n_scales-1)!'
+    assert all(hparams.input_size[i]%(hparams.patch_size[i]*2**(hparams.n_scales-1))==0 
+                for i in range(len(hparams.input_size))), \
+        'input_size must be a multiple of patch_size*2**(n_scales-1)!'
     assert hparams.num_epochs[-1]%hparams.val_freq==0, \
-           'last num_epochs must be a multiple of val_freq!'
-    hparams.batch_size = min(hparams.batch_size,
-                             hparams.patch_wh[0]*hparams.patch_wh[1])
+        'last num_epochs must be a multiple of val_freq!'
+    for i in range(len(hparams.patch_size)):
+        setattr(hparams, f'p{i+1}', hparams.patch_size[i])
+    hparams.batch_size = min(hparams.batch_size, np.prod(hparams.patch_size))
     num_epochs = hparams.num_epochs[::-1]
 
-    # load image of the original scale once
-    orig_image = np.float32(Image.open(hparams.path).convert('RGB'))/255.
-    orig_image = cv2.resize(orig_image, (hparams.img_wh[0], hparams.img_wh[1]))
+    hparams.patterns = patterns_dict[hparams.task]
 
-    # split into sub-images
-    nw_sub = hparams.img_wh[0]//hparams.subimg_wh[0]
-    nh_sub = hparams.img_wh[1]//hparams.subimg_wh[1]
-    sub_images = rearrange(orig_image,
-                           '(nh ph) (nw pw) c -> (nh nw) ph pw c',
-                           nh=nh_sub, nw=nw_sub,
-                           ph=hparams.subimg_wh[1], pw=hparams.subimg_wh[0])
-    del orig_image
+    # load input of the original scale once
+    if hparams.task == 'image':
+        inp = np.float32(Image.open(hparams.path).convert('RGB'))/255.
+        inp = cv2.resize(inp, (hparams.input_size[0], hparams.input_size[1]))
+    elif hparams.task == 'mesh':
+        inp = np.load(hparams.path)
 
-    sub_psnrs = []
+    # train n_scales progressively
+    for j in reversed(range(hparams.n_scales)): # J-1 ~ 0 coarse to fine
+        hparams.level = j
+        hparams.final_act = 'sigmoid'
 
-    # train each sub-image independently
-    for i in range(nw_sub*nh_sub):
-        image = sub_images[0]
-        sub_images = sub_images[1:] # pop the first image and remove it to save memory
-        # train n_scales progressively
-        for j in reversed(range(hparams.n_scales)): # J-1 ~ 0 coarse to fine
-            hparams.subimg_idx = i
-            hparams.level = j
-            hparams.final_act = 'sigmoid'
+        I_j_gt = einops_f(inp, hparams.patterns['reshape'][0])
+        I_j_gt = F.interpolate(torch.from_numpy(I_j_gt),
+                               mode=hparams.patterns['mode'],
+                               scale_factor=1/2**j,
+                               align_corners=True)
+        I_j_gt = einops_f(I_j_gt, hparams.patterns['reshape'][1])
 
-            I_j_gt = cv2.resize(image, None, fx=1/2**j, fy=1/2**j)
-            # number of horizontal and vertical blocks
-            hparams.nh = hparams.subimg_wh[1]//(hparams.patch_wh[1]*2**j)
-            hparams.nw = hparams.subimg_wh[0]//(hparams.patch_wh[0]*2**j)
-            if j <= hparams.n_scales-2:
-                I_j_u_ = rearrange(I_j_u,
-                                   '1 c (nh ph) (nw pw) -> (nh nw) (ph pw) c',
-                                   nh=hparams.nh,
-                                   nw=hparams.nw)
-                I_j_gt_ = rearrange(I_j_gt, '(nh ph) (nw pw) c -> (nh nw) (ph pw) c',
-                                    nh=hparams.nh,
-                                    nw=hparams.nw)
-                I_j_gt_ = torch.tensor(I_j_gt_, dtype=I_j_u.dtype, device=I_j_u.device)
-                residual = I_j_gt_-I_j_u_
-                # compute active blocks
-                loss = reduce(residual**2, 'n p c -> n', 'mean')
-                active_blocks = loss>hparams.loss_thr
-                hparams.n_blocks = active_blocks.sum().item()
-                if hparams.pyr=='laplacian': # compute residual
-                    scales = reduce(torch.abs(residual[active_blocks]),
-                                    'n p c -> n 1 1', 'max')
-                    I_j_gt -= rearrange(I_j_u.cpu().numpy(), '1 c h w -> h w c')
-                    hparams.final_act = 'sin'
-            else: # coarsest level
-                hparams.n_blocks = hparams.nh*hparams.nw
-                active_blocks = torch.ones(hparams.n_blocks, dtype=torch.bool)
+        # compute number of blocks in each dimension
+        n_blocks = 1
+        for i in range(len(hparams.input_size)):
+            ni = hparams.input_size[i]//(hparams.patch_size[i]*2**j)
+            setattr(hparams, f'n{i+1}', ni)
+            n_blocks *= ni
 
-            system = MINERSystem(hparams)
-            system.register_buffer("active_blocks", active_blocks)
-            system.I_j_gt = I_j_gt
-            if j<=hparams.n_scales-2 and hparams.pyr=='laplacian':
-                system.I_j_u_ = I_j_u_
-                system.register_buffer("scales", scales)
+        if j<=hparams.n_scales-2:
+            I_j_u_ = einops_f(I_j_u, hparams.patterns['reshape'][2], hparams)
+            I_j_gt_ = einops_f(I_j_gt, hparams.patterns['reshape'][3], hparams)
+            I_j_gt_ = torch.tensor(I_j_gt_, dtype=I_j_u.dtype, device=I_j_u.device)
+            residual = I_j_gt_-I_j_u_
+            # compute active blocks
+            loss = reduce(residual**2, 'n p c -> n', 'mean')
+            active_blocks = loss>hparams.loss_thr
+            hparams.n_blocks = active_blocks.sum().item()
+            if hparams.pyr=='laplacian': # compute residual
+                scales = reduce(torch.abs(residual[active_blocks]),
+                                'n p c -> n 1 1', 'max')
+                I_j_gt -= einops_f(I_j_u.cpu().numpy(),
+                                   hparams.patterns['reshape'][1])
+                hparams.final_act = 'sin'
+        else: # coarsest level
+            hparams.n_blocks = n_blocks
+            active_blocks = torch.ones(hparams.n_blocks, dtype=torch.bool)
 
-            pbar = TQDMProgressBar(refresh_rate=1)
-            callbacks = [pbar]
+        system = MINERSystem(hparams)
+        system.register_buffer("active_blocks", active_blocks)
+        system.I_j_gt = I_j_gt
+        if j<=hparams.n_scales-2 and hparams.pyr=='laplacian':
+            system.I_j_u_ = I_j_u_
+            system.register_buffer("scales", scales)
 
-            logger = TensorBoardLogger(save_dir='logs',
-                                       name=f'{hparams.exp_name}/subimg{i:03d}/l{j}',
-                                       default_hp_metric=False)
+        logger = TensorBoardLogger(save_dir='logs',
+                                    name=f'{hparams.exp_name}/l{j}',
+                                    default_hp_metric=False)
 
-            hparams.num_epochs = num_epochs[min(j, len(num_epochs)-1)]
-            trainer = Trainer(max_epochs=hparams.num_epochs,
-                              callbacks=callbacks,
-                              logger=logger,
-                              enable_model_summary=True,
-                              accelerator='auto',
-                              devices=1,
-                              num_sanity_val_steps=-1, # validate the whole image once before training
-                              log_every_n_steps=1,
-                              reload_dataloaders_every_n_epochs=1,
-                              check_val_every_n_epoch=hparams.val_freq if j==0 else hparams.num_epochs)
-            trainer.fit(system)
+        hparams.num_epochs = num_epochs[min(j, len(num_epochs)-1)]
+        trainer = Trainer(max_epochs=hparams.num_epochs,
+                          callbacks=[TQDMProgressBar(refresh_rate=1)],
+                          logger=logger,
+                          enable_model_summary=True,
+                          accelerator='auto',
+                          devices=1,
+                          num_sanity_val_steps=-1, # validate the whole data once before training
+                          log_every_n_steps=1,
+                          reload_dataloaders_every_n_epochs=1,
+                          check_val_every_n_epoch=hparams.val_freq if j==0 else hparams.num_epochs)
+        trainer.fit(system)
 
-            # upsample the predicted image for the next level
-            I_j_u = F.interpolate(system.rgb_pred,
-                                  mode='bilinear',
-                                  scale_factor=2,
-                                  align_corners=True)
+        # upsample the pred for the next level
+        I_j_u = F.interpolate(system.pred,
+                              mode=hparams.patterns['mode'],
+                              scale_factor=2,
+                              align_corners=True)
 
-        # compute the psnr for this sub-image
-        sub_psnrs += [psnr(rearrange(system.rgb_pred.numpy(), '1 c h w -> h w c'),
-                           image)]
-
-    print(f'PSNR : {np.mean(sub_psnrs):.2f} dB')
+    if hparams.task == 'image':
+        # compute psnr
+        psnr_ = psnr(einops_f(system.pred.cpu().numpy(),
+                              hparams.patterns['reshape'][1]), inp)
+        print(f'PSNR : {psnr_:.2f} dB')
