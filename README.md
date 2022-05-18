@@ -81,17 +81,13 @@ where you can see training curves and images.
 
 # :red_square::green_square::blue_square: Block decomposition
 
-To visualize block decomposition per scale like Fig. 4 in the paper, see [block_visualization.ipynb](block_visualization.ipynb).
+To reconstruct the image using trained model and to visualize block decomposition per scale like Fig. 4 in the paper, see [image_test.ipynb](image_test.ipynb).
+
+Pretrained models can be downloaded from [releases](https://github.com/kwea123/MINER_pl/releases).
 
 Examples:
 ![pluto4k_5scale_lap](https://user-images.githubusercontent.com/11364490/168275200-e625d828-61df-4ff2-a658-7dd10e123847.jpg)
 ![tokyo6k_5scale_lap](https://user-images.githubusercontent.com/11364490/168275208-a35e828d-0ca0-408f-90c3-89dd97d108ba.jpg)
-
-# :mag_right: Testing
-
-To reconstruct the image using trained model, see [image_test.ipynb](image_test.ipynb).
-
-Pretrained models can be downloaded from [releases](https://github.com/kwea123/MINER_pl/releases).
 
 # :bulb: Implementation tricks
 
