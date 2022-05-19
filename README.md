@@ -34,7 +34,7 @@ Unofficial implementation of [MINER: Multiscale Implicit Neural Representations]
 # :key: Training
 
 <details>
-  <summary><h2>image</summary>
+  <summary><h2 style="margin-top: 0px">image</summary>
 
 Pluto example:
 ```python3
