@@ -4,10 +4,13 @@ def get_opts():
     parser = argparse.ArgumentParser()
 
     parser.add_argument('--task', type=str, default='image',
-                        choices=['image', 'occ'],
-                        help='which task to perform')
+                        choices=['image', 'mesh'],
+                        help='which reconstruction to perform')
     parser.add_argument('--path', type=str, default='images/pluto.png',
                         help='path to the object to reconstruct')
+    # for mesh evaluatoin only
+    parser.add_argument('--mesh_path', type=str, default='',
+                        help='gt mesh path to compute chamfer distance')
     parser.add_argument('--patch_size', nargs="+", type=int, default=[32, 32],
                         help='resolution of each patch')
     parser.add_argument('--n_scales', type=int, default=1,
@@ -20,7 +23,7 @@ def get_opts():
 
     parser.add_argument('--use_pe', action='store_true', default=False,
                         help='use positional encoding for uv')
-    parser.add_argument('--n_freq', type=int, default=5,
+    parser.add_argument('--n_freq', type=int, default=4,
                         help='number of frequencies of positional encoding')
     parser.add_argument('--n_layers', type=int, default=4,
                         help='number of layers in each MLP')

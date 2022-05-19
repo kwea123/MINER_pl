@@ -46,7 +46,7 @@ def einops_f(x, pattern, hparams=None, f=rearrange):
         return f(x, pattern)
 
     required_keys = \
-        set(pattern.split('->')[0].replace('(', '').replace(')', '').split(' '))
+        set(pattern.replace('(', '').replace(')', '').split(' '))
 
     return f(x, pattern, **{k: v for k, v in vars(hparams).items()
                                 if k in required_keys})

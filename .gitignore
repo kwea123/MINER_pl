@@ -2,6 +2,7 @@ ckpts/
 logs/
 images/
 meshes/
+occupancies/
 *.png
 *.jpg
 *.mp4

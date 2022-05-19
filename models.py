@@ -1,6 +1,6 @@
 import torch
 from torch import nn
-import numpy as np
+from einops import repeat
 
 
 @torch.jit.script
@@ -11,6 +11,33 @@ def gaussian_activation(x, a):
 @torch.jit.script
 def scaledsin_activation(x, a):
     return torch.sin(x*a)
+
+# encoding matrices, used in PE
+E_2d = torch.eye(2)
+
+# defined in mipnerf360 https://arxiv.org/pdf/2111.12077.pdf page11
+E_3d = torch.FloatTensor([
+    0.8506508, 0, 0.5257311,
+    0.809017, 0.5, 0.309017,
+    0.5257311, 0.8506508, 0,
+    1, 0, 0,
+    0.809017, 0.5, -0.309017,
+    0.8506508, 0, -0.5257311,
+    0.309017, 0.809017, -0.5,
+    0, 0.5257311, -0.8506508,
+    0.5, 0.309017, -0.809017,
+    0, 1, 0,
+    -0.5257311, 0.8506508, 0,
+    -0.309017, 0.809017, -0.5,
+    0, 0.5257311, 0.8506508,
+    -0.309017, 0.809017, 0.5,
+    0.309017, 0.809017, 0.5,
+    0.5, 0.309017, 0.809017,
+    0.5, -0.309017, 0.809017,
+    0, 0, 1,
+    -0.5, 0.309017, 0.809017,
+    -0.809017, 0.5, 0.309017,
+    -0.809017, 0.5, -0.309017]).view(21, 3).T
 
 
 class PE(nn.Module):
@@ -77,18 +104,19 @@ class BlockMLP(nn.Module):
             setattr(self, f'b{i}', bi)
             setattr(self, f'a{i}', ai)
 
-    def forward(self, x, b_chunks=16384):
+    def forward(self, x, b_chunks=16384, to_cpu=False, **kwargs):
         """
         Inputs:
             x: (n_blocks, B, n_in)
             b_chunks: int, @x is split into chunks of at most @b_chunks blocks
-        
+
         Outputs:
             (n_blocks, B, n_out)
         """
         out = []
         for c in range(0, len(x), b_chunks):
             x_ = x[c:c+b_chunks]
+            if 'pe' in kwargs: x_ = kwargs['pe'](x_)
             for i in range(self.n_layers):
                 wi = getattr(self, f'w{i}')[c:c+b_chunks]
                 bi = getattr(self, f'b{i}')[c:c+b_chunks]
@@ -100,5 +128,6 @@ class BlockMLP(nn.Module):
                         x_ = ai(x_@wi+bi)
                     elif self.final_act == 'sin':
                         x_ = scaledsin_activation(x_@wi+bi, ai[c:c+b_chunks])
+            if to_cpu: x_ = x_.cpu()
             out += [x_]
         return torch.cat(out)

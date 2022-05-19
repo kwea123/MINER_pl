@@ -34,4 +34,4 @@ class CoordinateDataset(Dataset):
     def __getitem__(self, idx):
         # each batch contains all blocks with randomly selected cells
         # the cells in each block are of the same position
-        return {"in": self.inp[:, idx], "out": self.out[:, idx]}
+        return {"inp": self.inp[:, idx], "out": self.out[:, idx]}
