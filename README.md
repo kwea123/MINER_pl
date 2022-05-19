@@ -3,8 +3,6 @@ Unofficial implementation of [MINER: Multiscale Implicit Neural Representations]
 
 ![image](https://user-images.githubusercontent.com/11364490/168208863-656a0a7d-35d9-4b9b-86f9-d52da4182e35.png)
 
-### Only image reconstruction task is implemented currently.
-
 # :open_book: Ref readings
 
 *  [Laplacian pyramid explanation](https://paperswithcode.com/method/laplacian-pyramid)
@@ -29,6 +27,7 @@ Unofficial implementation of [MINER: Multiscale Implicit Neural Representations]
 # :computer: Installation
 
 *  Run `pip install -r requirements.txt`.
+*  Install [kaolin](https://kaolin.readthedocs.io/en/latest/notes/installation.html) if you want to perform mesh reconstruction.
 *  Download the images from [Acknowledgement](#gift_heart-acknowledgement) or prepare your own images into a folder called `images`.
 
 # :key: Training
@@ -38,7 +37,7 @@ Pluto example:
 python train.py \
     --task image --path images/pluto.png \
     --img_wh 4096 4096 --patch_wh 32 32 --batch_size 256 --n_scales 4 \
-    --use_pe --n_freq 4 --n_layers 3 \
+    --use_pe --n_layers 3 \
     --num_epochs 50 50 50 200 \
     --exp_name pluto4k_4scale 
 ```
@@ -48,7 +47,7 @@ Tokyo station example:
 python train.py \
     --task image --path images/tokyo-station.jpg \
     --img_wh 6000 4000 --patch_wh 25 25 --batch_size 192 --n_scales 5 \
-    --use_pe --n_freq 4 --n_layers 3 \
+    --use_pe --n_layers 3 \
     --num_epochs 50 50 50 50 150 \
     --exp_name tokyo6k_5scale 
 ```
