@@ -32,6 +32,9 @@ Unofficial implementation of [MINER: Multiscale Implicit Neural Representations]
 
 # :key: Training
 
+<details>
+  <summary><h2>image</summary>
+
 Pluto example:
 ```python3
 python train.py \
@@ -65,6 +68,17 @@ python train.py \
 *paper settings (6 scales, each network has 4 layer with 9 hidden units)
 
 The original image will be resized to `img_wh` for reconstruction. You need to make sure `img_wh` divided by `2^(n_scales-1)` (the resolution at the coarsest level) is still a multiple of `patch_wh`.
+
+------------------------------------------
+
+</details>
+  
+<details>
+  <summary><h2>mesh</summary>
+
+------------------------------------------
+
+</details>
 
 For full options, please see [here](opt.py). Some important options:
 
