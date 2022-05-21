@@ -114,7 +114,7 @@ where you can see training curves and images.
 
 To reconstruct the image using trained model and to visualize block decomposition per scale like Fig. 4 in the paper, see [image_test.ipynb](image_test.ipynb) or [mesh_test.ipynb](mesh_test.ipynb)
 
-Pretrained models can be downloaded from [releases](https://github.com/kwea123/MINER_pl/releases).
+<!-- Pretrained models can be downloaded from [releases](https://github.com/kwea123/MINER_pl/releases). -->
 
 Examples:
 <p align="center">

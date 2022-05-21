@@ -24,16 +24,13 @@ from patterns import patterns_dict, einops_f
 
 # metrics
 from metrics import mse, psnr, iou
-try:
-    from kaolin.metrics.pointcloud import chamfer_distance
-except: pass
 
 # optimizer
 from torch.optim import RAdam
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
 from pytorch_lightning import LightningModule, Trainer
-from pytorch_lightning.callbacks import TQDMProgressBar
+from pytorch_lightning.callbacks import EarlyStopping, TQDMProgressBar
 from pytorch_lightning.loggers import TensorBoardLogger
 
 
@@ -68,6 +65,8 @@ class MINERSystem(LightningModule):
                                   a=hparams.a)
         # the network used in validation, updated by the trained network
         self.blockmlp = copy.deepcopy(self.blockmlp_)
+        for p in self.blockmlp.parameters():
+            p.requires_grad = False
 
         self.register_buffer('training_blocks',
                              torch.ones(hparams.n_blocks, dtype=torch.bool))
@@ -128,16 +127,14 @@ class MINERSystem(LightningModule):
                      on_step=False, on_epoch=True)
             self.first_val = False
 
-        inp = einops_f(batch['inp'], 'b 1 c -> 1 b c')
-        inp = repeat(inp, '1 p c -> n p c', n=int(self.n_training_blocks))
+        inp = einops_f(batch['inp'], 'b n c -> n b c')
         gt = einops_f(batch['out'], 'b n c -> n b c')
-        pred = self.call(self.blockmlp_, inp, hparams.b_chunk)
+        pred = self.call(self.blockmlp_, inp, hparams.b_chunks)
         mse_ = mse(pred, gt, reduction='none')
         loss = reduce(mse_, 'n p c -> n', 'mean')
         # heuristics: easier blocks have higher weights (make them converge faster)
         weight = 1/(loss.detach()+1e-8)
 
-        # TODO: loss curve is zigzag, maybe accumulate gradient?
         self.opt_.zero_grad()
         self.manual_backward((weight*loss).mean())
         self.opt_.step()
@@ -171,10 +168,10 @@ class MINERSystem(LightningModule):
                         self.opt.state[p][k] = v
 
     def validation_step(self, batch, batch_idx):
-        inp = einops_f(batch['inp'], 'p 1 c -> 1 p c')
+        inp = einops_f(batch['inp'], 'p n c -> n p c')
         inp = repeat(inp, '1 p c -> n p c', n=int(self.active_blocks.sum()))
         gt = einops_f(batch['out'], 'p n c -> n p c')
-        pred = self.call(self.blockmlp, inp, hparams.b_chunk)
+        pred = self.call(self.blockmlp, inp, hparams.b_chunks)
 
         return {'gt': gt, 'pred': pred}
 
@@ -183,7 +180,6 @@ class MINERSystem(LightningModule):
         pred = torch.cat([x['pred'] for x in outputs], 1) # depends on active blocks
 
         # remove converged blocks
-        # TODO: handle the case where all losses are below the threshold (no blocks to train anymore...)
         active_blocks_cpu = self.active_blocks.cpu()
         mse_ = mse(pred, gt[active_blocks_cpu], reduction='none')
         loss = reduce(mse_, 'n p c -> n', 'mean')
@@ -198,7 +194,7 @@ class MINERSystem(LightningModule):
             rgb_pred_ = torch.zeros_like(gt)
             rgb_pred_[active_blocks_cpu] = pred
             if hparams.pyr=='gaussian':
-                rgb_pred_[~active_blocks_cpu] = I_j_u_[~active_blocks_cpu]
+                rgb_pred_[~active_blocks_cpu] = self.I_j_u_[~active_blocks_cpu]
             elif hparams.pyr=='laplacian':
                 if hparams.task=='image' and hparams.log_image:
                     lap_gt = einops_f(gt, hparams.patterns['reshape'][4], hparams)
@@ -208,8 +204,8 @@ class MINERSystem(LightningModule):
                                   torch.cat([(lap_gt+1)/2, (lap_pred+1)/2]),
                                   self.current_epoch)
                 # add upsampled pred to laplacian
-                gt += I_j_u_
-                rgb_pred_ += I_j_u_
+                gt += self.I_j_u_
+                rgb_pred_ += self.I_j_u_
             pred = rgb_pred_
 
         self.pred = torch.clip(einops_f(pred, hparams.patterns['reshape'][4], hparams), 0, 1)
@@ -294,7 +290,9 @@ if __name__ == '__main__':
     if hparams.task == 'image':
         inp = np.float32(Image.open(hparams.path).convert('RGB'))/255.
     elif hparams.task == 'mesh':
-        inp = np.load(hparams.path).astype(np.float32) # precomputed bool (N, N, N, 1) occupancies
+        # precomputed (N, N, N, 1) occupancies
+        inp = np.unpackbits(np.load(hparams.path)) \
+              .reshape(*hparams.input_size)[..., None].astype(np.float32)
     inp = einops_f(inp, hparams.patterns['reshape'][0])
     inp = F.interpolate(torch.from_numpy(inp),
                         size=hparams.input_size,
@@ -307,7 +305,8 @@ if __name__ == '__main__':
         hparams.level = j
         hparams.final_act = 'sigmoid'
 
-        if j==0: I_j_gt = inp
+        if j==0:
+            I_j_gt = inp
         else:
             I_j_gt = F.interpolate(inp,
                                    mode=hparams.patterns['mode'],
@@ -337,6 +336,7 @@ if __name__ == '__main__':
                 I_j_gt -= einops_f(I_j_u.cpu().numpy(),
                                    hparams.patterns['reshape'][1])
                 hparams.final_act = 'sin'
+            del I_j_gt_, residual, loss
         else: # coarsest level
             hparams.n_blocks = n_blocks
             active_blocks = torch.ones(hparams.n_blocks, dtype=torch.bool)
@@ -344,17 +344,22 @@ if __name__ == '__main__':
         system = MINERSystem(hparams)
         system.register_buffer("active_blocks", active_blocks)
         system.I_j_gt = I_j_gt
+        del I_j_gt
         if j<=hparams.n_scales-2 and hparams.pyr=='laplacian':
             system.I_j_u_ = I_j_u_
+            del I_j_u_
             system.register_buffer("scales", scales)
 
         logger = TensorBoardLogger(save_dir='logs',
                                    name=f'{hparams.exp_name}/l{j}',
                                    default_hp_metric=False)
+        callbacks = [TQDMProgressBar(refresh_rate=1),
+                     EarlyStopping('val/n_training_blocks',
+                                   stopping_threshold=0.1)] # stop training if n_training_blocks reaches 0
 
         hparams.num_epochs = num_epochs[min(j, len(num_epochs)-1)]
         trainer = Trainer(max_epochs=hparams.num_epochs,
-                          callbacks=[TQDMProgressBar(refresh_rate=1)],
+                          callbacks=callbacks,
                           logger=logger,
                           enable_model_summary=True,
                           accelerator='auto',
@@ -365,17 +370,19 @@ if __name__ == '__main__':
                           check_val_every_n_epoch=hparams.val_freq if j==0 else hparams.num_epochs)
         trainer.fit(system)
 
-        # upsample the pred for the next level
-        I_j_u = F.interpolate(system.pred,
-                              mode=hparams.patterns['mode'],
-                              scale_factor=2,
-                              align_corners=True)
+        del logger, callbacks, trainer
+        if j>0: # upsample the pred for the next level
+            I_j_u = F.interpolate(system.pred,
+                                  mode=hparams.patterns['mode'],
+                                  scale_factor=2,
+                                  align_corners=True)
+        else:
+            pred = system.pred
+            del system
 
     if hparams.task == 'image':
-        psnr_ = psnr(system.pred.cpu(), inp).numpy()
+        psnr_ = psnr(pred.cpu(), inp).numpy()
         print(f'PSNR : {psnr_:.4f} dB')
     elif hparams.task == 'mesh':
-        iou_ = iou(system.pred.cpu(), inp).numpy()
+        iou_ = iou(pred.cpu(), inp).numpy()
         print(f'IoU : {iou_:.6f}')
-        # TODO: compute chamfer L1 distance after marching cubes...
-        # m = trimesh.load(hparams.mesh_path)
