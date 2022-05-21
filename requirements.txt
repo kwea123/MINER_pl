@@ -10,7 +10,7 @@ imageio-ffmpeg==0.4.7
 opencv-python==4.5.5.64
 
 pysdf==0.1.8
+PyMCubes==0.1.2
 trimesh==3.12.0
 plotly==5.8.0
 scipy==1.8.0
-PyMCubes==0.1.2

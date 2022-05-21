@@ -27,8 +27,8 @@ Unofficial implementation of [MINER: Multiscale Implicit Neural Representations]
 # :computer: Installation
 
 *  Run `pip install -r requirements.txt`.
-*  Install [kaolin](https://kaolin.readthedocs.io/en/latest/notes/installation.html) if you want to perform mesh reconstruction.
 *  Download the images from [Acknowledgement](#gift_heart-acknowledgement) or prepare your own images into a folder called `images`.
+*  Download the meshes from [Acknowledgement](#gift_heart-acknowledgement) or prepare your own meshes into a folder called `meshes`.
 
 # :key: Training
 
@@ -39,20 +39,20 @@ Pluto example:
 ```python3
 python train.py \
     --task image --path images/pluto.png \
-    --img_wh 4096 4096 --patch_wh 32 32 --batch_size 256 --n_scales 4 \
+    --input_size 4096 4096 --patch_size 32 32 --batch_size 256 --n_scales 4 \
     --use_pe --n_layers 3 \
     --num_epochs 50 50 50 200 \
-    --exp_name pluto4k_4scale 
+    --exp_name pluto4k_4scale
 ```
 
 Tokyo station example:
 ```python3
 python train.py \
     --task image --path images/tokyo-station.jpg \
-    --img_wh 6000 4000 --patch_wh 25 25 --batch_size 192 --n_scales 5 \
+    --input_size 6000 4000 --patch_size 25 25 --batch_size 192 --n_scales 5 \
     --use_pe --n_layers 3 \
     --num_epochs 50 50 50 50 150 \
-    --exp_name tokyo6k_5scale 
+    --exp_name tokyo6k_5scale
 ```
 
 | Image (size) | Train time (s) | GPU mem (MiB) | #Params (M) | PSNR |
@@ -76,6 +76,24 @@ The original image will be resized to `img_wh` for reconstruction. You need to m
 <details>
   <summary><h2>mesh</summary>
 
+First, convert the mesh to N^3 occupancy grid by
+```python3
+python preprocess_mesh.py --N 512 --M 1 --T 9 --path <path/to/mesh> 
+```
+This will create N^3 occupancy to be regressed by the neural network.
+For detailed options, please see [preprocess_mesh.py](preprocess_mesh.py).
+
+Next, start training (bunny example):
+```python3
+python train.py \
+    --task mesh --path occupancy/bunny_512.npy \
+    --input_size 512 --patch_size 16 --batch_size 512 --n_scales 4 \
+    --use_pe --n_freq 5 --n_layers 2 --n_hidden 8 \
+    --loss_thr 5e-3 --b_chunks 512 \
+    --num_epochs 50 50 50 150 \
+    --exp_name bunny512_4scale
+```
+
 ------------------------------------------
 
 </details>
@@ -94,7 +112,7 @@ where you can see training curves and images.
 
 # :red_square::green_square::blue_square: Block decomposition
 
-To reconstruct the image using trained model and to visualize block decomposition per scale like Fig. 4 in the paper, see [image_test.ipynb](image_test.ipynb).
+To reconstruct the image using trained model and to visualize block decomposition per scale like Fig. 4 in the paper, see [image_test.ipynb](image_test.ipynb) or [mesh_test.ipynb](mesh_test.ipynb)
 
 Pretrained models can be downloaded from [releases](https://github.com/kwea123/MINER_pl/releases).
 
@@ -116,6 +134,10 @@ Examples:
 *  Shibuya image: [Trevor Dobson](https://www.flickr.com/photos/trevor_dobson_inefekt69/29314390837)
 
 *  Tokyo station image: [baroparo](https://pixabay.com/photos/tokyo-station-tokyo-station-japan-641769/?download)
+
+*  [Stanford scanning](http://graphics.stanford.edu/data/3Dscanrep/)
+
+*  [Turbosquid](https://www.turbosquid.com/)
 
 # :question: Further readings
 
