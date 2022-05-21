@@ -22,7 +22,7 @@ Unofficial implementation of [MINER: Multiscale Implicit Neural Representations]
 *  In the pseudo code on page 8, where the author states **Weight sharing for images**, it means finer level networks are initialized with coarser level network weights. However, I did not find the correct way to implement this. Therefore, I initialize the network weights from scratch for all levels.
 *  The paper says it uses sinusoidal activation (does he mean SIREN? I don't know), but I use gaussian activation (in hidden layers) with trainable parameters (per block) like my experiments in [the other repo](https://github.com/kwea123/Coordinate-MLPs). In finer levels where the model predicts laplacian pyramids, I use sinusoidal activation `x |-> sin(ax)` with trainable parameters `a` (per block) as output layer (btw, this performs *significantly* better than simple `tanh`). Moreover, I precompute the maximum amplitude for laplacian residuals, and use it to scale the output, and I find it to be better than without scaling.
 *  I experimented with a common trick in coordinate mlp: *[positional encoding](https://github.com/tancik/fourier-feature-networks)* and find that using it can increase training time/accuracy with the same number of parameters (by reducing 1 layer). This can be turned on/off by specifying the argument `--use_pe`. The optimal number of frequencies depends on the patch size, the larger patch sizes, the more number of frequencies you need and vice versa.
-*  Some difference in the hyperparameters: the default learning rate is `3e-2` instead of `5e-4`. Optimizer is `RAdam` instead of `Adam`. Block pruning happens when the loss is lower than `1e-4` (i.e. when PSNR>=40) for image and `5e-3` for occupancy rather than `2e-7`. Feel free to adjust these hyperparameters, but I find them to be optimal for a `patch_size` around `32`.
+*  Some difference in the hyperparameters: the default learning rate is `3e-2` instead of `5e-4`. Optimizer is `RAdam` instead of `Adam`. Block pruning happens when the loss is lower than `1e-4` (i.e. when PSNR>=40) for image and `5e-3` for occupancy rather than `2e-7`.
 
 # :computer: Installation
 
@@ -78,10 +78,10 @@ The original image will be resized to `img_wh` for reconstruction. You need to m
 
 First, convert the mesh to N^3 occupancy grid by
 ```python3
-python preprocess_mesh.py --N 512 --M 1 --T 9 --path <path/to/mesh> 
+python preprocess_mesh.py --N 512 --M 1 --T 1 --path <path/to/mesh> 
 ```
 This will create N^3 occupancy to be regressed by the neural network.
-For detailed options, please see [preprocess_mesh.py](preprocess_mesh.py).
+For detailed options, please see [preprocess_mesh.py](preprocess_mesh.py). Typically, increase `M` or `T` if you find the resulting occupancy bad.
 
 Next, start training (bunny example):
 ```python3
@@ -117,8 +117,16 @@ To reconstruct the image using trained model and to visualize block decompositio
 Pretrained models can be downloaded from [releases](https://github.com/kwea123/MINER_pl/releases).
 
 Examples:
-![pluto4k_5scale_lap](https://user-images.githubusercontent.com/11364490/168275200-e625d828-61df-4ff2-a658-7dd10e123847.jpg)
-![tokyo6k_5scale_lap](https://user-images.githubusercontent.com/11364490/168275208-a35e828d-0ca0-408f-90c3-89dd97d108ba.jpg)
+<p align="center">
+  <img src="https://user-images.githubusercontent.com/11364490/168275200-e625d828-61df-4ff2-a658-7dd10e123847.jpg", width="45%">
+  <img src="https://user-images.githubusercontent.com/11364490/168275208-a35e828d-0ca0-408f-90c3-89dd97d108ba.jpg", width="45%">
+</p>
+    
+<p align="center">
+  <img src="https://user-images.githubusercontent.com/11364490/169640414-9da542dc-2df5-4a46-b80a-9591e86f98b3.jpg", width="30%">
+  <img src="https://user-images.githubusercontent.com/11364490/169640416-59e4391f-7377-4b7e-b103-715b25d7253c.jpg", width="30%">
+  <img src="https://user-images.githubusercontent.com/11364490/169640742-49f4a43e-4705-4463-bbe4-822839220ddd.jpg", width="30%">
+</p>
 
 # :bulb: Implementation tricks
 
