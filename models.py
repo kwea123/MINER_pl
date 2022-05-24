@@ -1,6 +1,8 @@
 import torch
 from torch import nn
-from einops import repeat
+from torch.distributions.gamma import Gamma
+import numpy as np
+from einops import rearrange
 
 
 @torch.jit.script
@@ -124,6 +126,91 @@ class BlockMLP(nn.Module):
                 if i<self.n_layers-1:
                     x_ = gaussian_activation(x_@wi+bi, ai[c:c+b_chunks])
                 else: # last layer
+                    if self.final_act == 'sigmoid':
+                        x_ = ai(x_@wi+bi)
+                    elif self.final_act == 'sin':
+                        x_ = scaledsin_activation(x_@wi+bi, ai[c:c+b_chunks])
+            if to_cpu: x_ = x_.cpu()
+            out += [x_]
+        return torch.cat(out)
+
+
+# from https://github.com/boschresearch/multiplicative-filter-networks/blob/main/mfn/mfn.py
+class BlockMLP_Gabor(nn.Module):
+    """
+    A BlockMLP consists of all the MLPs of a certain scale.
+    All MLPs are inferred at the same time without using for loop.
+    """
+    def __init__(self, n_blocks, n_in, n_out,
+                 n_layers, n_hidden, final_act,
+                 a=0.1, weight_scale=32.0, alpha=6.0, beta=1.0):
+        super().__init__()
+
+        self.n_layers = n_layers
+        self.final_act = final_act
+        weight_scale /= (n_layers-1)**0.5 # same as patch size?
+        for i in range(n_layers):
+            if i < n_layers-1:
+                fwi = nn.Parameter(torch.empty(n_blocks, n_in, n_hidden))
+                fbi = nn.Parameter(torch.empty(n_blocks, 1, n_hidden))
+                fmui = nn.Parameter(2*torch.rand(n_blocks, 1, n_hidden, n_in)-1)
+                fgammai = \
+                    nn.Parameter(
+                        Gamma(alpha/(n_layers-1), beta).sample((n_blocks, n_hidden)))
+                nn.init.uniform_(fwi, -1/(n_in**0.5), 1/(n_in**0.5))
+                nn.init.uniform_(fbi, -np.pi, np.pi)
+                fwi.data *= weight_scale*rearrange(fgammai, 'n d -> n 1 d')**0.5
+                
+                setattr(self, f'fw{i}', fwi)
+                setattr(self, f'fb{i}', fbi)
+                setattr(self, f'fmu{i}', fmui)
+                setattr(self, f'fgamma{i}', fgammai)
+            if i > 0:
+                o = n_hidden if i<n_layers-1 else n_out
+                wi = nn.Parameter(torch.empty(n_blocks, n_hidden, o))
+                bi = nn.Parameter(torch.empty(n_blocks, 1, o))
+                nn.init.uniform_(wi, -1/(n_hidden**0.5), 1/(n_hidden**0.5))
+                nn.init.uniform_(bi, -1/(n_hidden**0.5), 1/(n_hidden**0.5))
+                setattr(self, f'w{i}', wi)
+                setattr(self, f'b{i}', bi)
+                if i==n_layers-1:
+                    if final_act == 'sigmoid':
+                        ai = nn.Sigmoid()
+                    elif final_act == 'sin':
+                        ai = nn.Parameter(a*torch.ones(n_blocks, 1, 1))
+                    setattr(self, f'a{i}', ai)
+
+    def forward(self, x, b_chunks=16384, to_cpu=False, **kwargs):
+        """
+        Inputs:
+            x: (n_blocks, B, n_in)
+            b_chunks: int, @x is split into chunks of at most @b_chunks blocks
+
+        Outputs:
+            (n_blocks, B, n_out)
+        """
+        out = []
+        for c in range(0, len(x), b_chunks):
+            x_ = xi = x[c:c+b_chunks]
+            for i in range(self.n_layers):
+                if i<self.n_layers-1:
+                    fwi = getattr(self, f'fw{i}')[c:c+b_chunks]
+                    fbi = getattr(self, f'fb{i}')[c:c+b_chunks]
+                    fmui = getattr(self, f'fmu{i}')[c:c+b_chunks]
+                    fgammai = getattr(self, f'fgamma{i}')[c:c+b_chunks]
+                    D = torch.norm(rearrange(xi, 'n b d -> n b 1 d')-fmui, dim=-1)**2
+                if i>0:
+                    wi = getattr(self, f'w{i}')[c:c+b_chunks]
+                    bi = getattr(self, f'b{i}')[c:c+b_chunks]
+                if i==0:
+                    x_ = torch.sin(xi@fwi+fbi) * \
+                         torch.exp(-D/2*rearrange(fgammai, 'n h -> n 1 h'))
+                elif i<self.n_layers-1:
+                    x_ = (x_@wi+bi) * \
+                         torch.sin(xi@fwi+fbi) * \
+                         torch.exp(-D/2*rearrange(fgammai, 'n h -> n 1 h'))
+                else: # last layer
+                    ai = getattr(self, f'a{i}')
                     if self.final_act == 'sigmoid':
                         x_ = ai(x_@wi+bi)
                     elif self.final_act == 'sin':

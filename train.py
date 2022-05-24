@@ -5,8 +5,6 @@ from einops import reduce, repeat
 from PIL import Image
 Image.MAX_IMAGE_PIXELS = None # enable reading large image
 import numpy as np
-import mcubes
-import trimesh
 import copy
 import os
 import warnings
@@ -19,14 +17,14 @@ from dataset import CoordinateDataset
 from torch.utils.data import DataLoader
 
 # models
-from models import E_2d, E_3d, PE, BlockMLP
+from models import E_2d, E_3d, PE, BlockMLP, BlockMLP_Gabor
 from patterns import patterns_dict, einops_f
 
 # metrics
 from metrics import mse, psnr, iou
 
 # optimizer
-from torch.optim import RAdam
+from torch.optim import Adam, RAdam
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
 from pytorch_lightning import LightningModule, Trainer
@@ -57,12 +55,25 @@ class MINERSystem(LightningModule):
 
         # create two copies of the same network
         # the network used in training
-        self.blockmlp_ = BlockMLP(n_blocks=hparams.n_blocks, 
-                                  n_in=n_in, n_out=n_out,
-                                  n_layers=hparams.n_layers,
-                                  n_hidden=hparams.n_hidden,
-                                  final_act=hparams.final_act,
-                                  a=hparams.a)
+        if hparams.arch == 'mlp':
+            self.optim = RAdam
+            self.blockmlp_ = BlockMLP(
+                                n_blocks=hparams.n_blocks, 
+                                n_in=n_in, n_out=n_out,
+                                n_layers=hparams.n_layers,
+                                n_hidden=hparams.n_hidden,
+                                final_act=hparams.final_act,
+                                a=hparams.a)
+        elif hparams.arch == 'gabor':
+            self.optim = Adam
+            self.blockmlp_ = BlockMLP_Gabor(
+                                n_blocks=hparams.n_blocks, 
+                                n_in=n_in, n_out=n_out,
+                                n_layers=hparams.n_layers,
+                                n_hidden=hparams.n_hidden,
+                                final_act=hparams.final_act,
+                                a=hparams.a,
+                                weight_scale=32.0)
         # the network used in validation, updated by the trained network
         self.blockmlp = copy.deepcopy(self.blockmlp_)
         for p in self.blockmlp.parameters():
@@ -110,7 +121,7 @@ class MINERSystem(LightningModule):
     def configure_optimizers(self):
         # dummy that stores optimizer states and performs scheduling
         # real optimizers are defined in @on_validation_end
-        self.opt = RAdam(self.blockmlp_.parameters(), lr=hparams.lr)
+        self.opt = self.optim(self.blockmlp_.parameters(), lr=hparams.lr)
         self.sch = CosineAnnealingLR(self.opt,
                                      hparams.num_epochs,
                                      hparams.lr/30)
@@ -248,7 +259,8 @@ class MINERSystem(LightningModule):
             setattr(self.blockmlp_, n, nn.Parameter(p[self.training_blocks].data))
 
         # create new opt_ with reduced blocks
-        self.opt_ = RAdam(self.blockmlp_.parameters(), lr=self.sch.get_last_lr()[0])
+        self.opt_ = self.optim(self.blockmlp_.parameters(),
+                               lr=self.sch.get_last_lr()[0])
         if not self.first_val:
             # inherit the states: step, exp_avg, etc
             for p, p_ in zip(self.opt.param_groups[0]['params'],
@@ -295,7 +307,7 @@ if __name__ == '__main__':
               .reshape(*hparams.input_size)[..., None].astype(np.float32)
     inp = einops_f(inp, hparams.patterns['reshape'][0])
     inp = F.interpolate(torch.from_numpy(inp),
-                        size=hparams.input_size,
+                        size=hparams.input_size[::-1],
                         mode=hparams.patterns['mode'],
                         align_corners=True)
     print('input loaded!')

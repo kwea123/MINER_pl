@@ -14,6 +14,9 @@ def get_opts():
                         help='number of laplacian pyramid levels')
     parser.add_argument('--input_size', nargs="+", type=int, default=[512, 512],
                         help='resolution of the input')
+    parser.add_argument('--arch', type=str, default='mlp',
+                        choices=['mlp', 'gabor'],
+                        help='use which model architecture')
     parser.add_argument('--pyr', type=str, default='laplacian',
                         choices=['gaussian', 'laplacian'],
                         help='use which pyramid')
