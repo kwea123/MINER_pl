@@ -57,23 +57,16 @@ class MINERSystem(LightningModule):
         # the network used in training
         if hparams.arch == 'mlp':
             self.optim = RAdam
-            self.blockmlp_ = BlockMLP(
-                                n_blocks=hparams.n_blocks, 
-                                n_in=n_in, n_out=n_out,
-                                n_layers=hparams.n_layers,
-                                n_hidden=hparams.n_hidden,
-                                final_act=hparams.final_act,
-                                a=hparams.a)
+            net = BlockMLP
         elif hparams.arch == 'gabor':
             self.optim = Adam
-            self.blockmlp_ = BlockMLP_Gabor(
-                                n_blocks=hparams.n_blocks, 
-                                n_in=n_in, n_out=n_out,
-                                n_layers=hparams.n_layers,
-                                n_hidden=hparams.n_hidden,
-                                final_act=hparams.final_act,
-                                a=hparams.a,
-                                weight_scale=32.0)
+            net = BlockMLP_Gabor
+        self.blockmlp_ = net(n_blocks=hparams.n_blocks, 
+                             n_in=n_in, n_out=n_out,
+                             n_layers=hparams.n_layers,
+                             n_hidden=hparams.n_hidden,
+                             final_act=hparams.final_act,
+                             a=hparams.a)
         # the network used in validation, updated by the trained network
         self.blockmlp = copy.deepcopy(self.blockmlp_)
         for p in self.blockmlp.parameters():

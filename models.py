@@ -143,17 +143,17 @@ class BlockMLP_Gabor(nn.Module):
     """
     def __init__(self, n_blocks, n_in, n_out,
                  n_layers, n_hidden, final_act,
-                 a=0.1, weight_scale=32.0, alpha=6.0, beta=1.0):
+                 a=0.1, weight_scale=256.0, alpha=6.0, beta=1.0):
         super().__init__()
 
         self.n_layers = n_layers
         self.final_act = final_act
-        weight_scale /= (n_layers-1)**0.5 # same as patch size?
+        weight_scale /= (n_layers-1)**0.5
         for i in range(n_layers):
             if i < n_layers-1:
                 fwi = nn.Parameter(torch.empty(n_blocks, n_in, n_hidden))
                 fbi = nn.Parameter(torch.empty(n_blocks, 1, n_hidden))
-                fmui = nn.Parameter(2*torch.rand(n_blocks, 1, n_hidden, n_in)-1)
+                fmui = nn.Parameter(2*(torch.rand(n_blocks, 1, n_hidden, n_in)-0.5))
                 fgammai = \
                     nn.Parameter(
                         Gamma(alpha/(n_layers-1), beta).sample((n_blocks, n_hidden)))
