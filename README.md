@@ -1,6 +1,8 @@
 # MINER_pl
 Unofficial implementation of [MINER: Multiscale Implicit Neural Representations](https://arxiv.org/pdf/2202.03532.pdf) in pytorch-lightning.
 
+**Official implementation** : https://github.com/vishwa91/miner
+
 ![image](https://user-images.githubusercontent.com/11364490/168208863-656a0a7d-35d9-4b9b-86f9-d52da4182e35.png)
 
 # :open_book: Ref readings
